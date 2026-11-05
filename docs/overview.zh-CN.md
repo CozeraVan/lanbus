@@ -2,7 +2,7 @@
 
 [English overview](overview.en.md) · [返回 README](../README.zh-CN.md) · [架构](architecture.md) · [协议](protocol.md)
 
-lanbus 是面向 AI agent 的局域网编排总线。主 agent（Claude Code、pi、kimi-cli，
+lanbus 是面向 AI agent 的局域网编排总线。主 agent（A agent CLI、B agent CLI、C agent 桌面端，
 或任何支持 MCP 的客户端）把任务派给运行在其他机器上的 agent，再用可机器校验的证据
 决定通过还是打回重做。
 
@@ -45,11 +45,11 @@ token 不能审批。面板会显示每个目标的 hostname、agent、`cwd`，�
 
 内置扫描器结合三类证据：
 
-1. 本机进程（Claude Code/Desktop、Codex、Kimi、DeepSeek、Ollama、LM Studio、
-   ComfyUI 等；Windows 还会读取运行中的 WSL 进程）；
+1. 本机进程（agent CLI 与桌面端可执行文件、本地模型运行时、图像/UI 工具；
+   Windows 还会读取运行中的 WSL 进程）；
 2. 本机 PID 到端口的映射；
-3. 局域网 TCP 探测与 HTTP 指纹（Ollama、OpenAI-compatible、Open WebUI、ComfyUI、
-   llama.cpp、vLLM、Gradio、Jupyter、Chrome DevTools、MCP `serverInfo`、
+3. 局域网 TCP 探测与 HTTP 指纹（本地模型运行时、OpenAI-compatible 服务、
+   对话/Web UI、推理服务、Notebook 服务、浏览器 DevTools、MCP `serverInfo`、
    lanbus `/health`、FastAPI/OpenAPI AI API）。
 
 纯 GUI、不监听端口的 agent 只能由它所在机器的进程扫描看到；在那台机器跑 worker 或
@@ -62,7 +62,7 @@ token 不能审批。面板会显示每个目标的 hostname、agent、`cwd`，�
 | 组件 | 语言 | 职责 |
 |---|---|---|
 | `lanbusd` | Go | 默认 hub：SQLite 任务、worker API、MCP、SSE、产物、operator 审批、Web UI |
-| `lanbus-worker` | Go | 拉取 worker：进程监督、Job Object/PTY、Claude/Codex/Kimi/DeepSeek/shell 适配、discover/ask、产物 |
+| `lanbus-worker` | Go | 拉取 worker：进程监督、Job Object/PTY、各 agent CLI 适配器（或 `--cmd`）、discover/ask、产物 |
 | `lanbus-scan` | Go | 零安装局域网扫描器 |
 | `lanbus-gui` | Go + Wails/WebView2 | Windows 桌面窗口 + 托盘，内嵌 dashboard |
 | `lanbus` | Python | CLI、侦查回退、浏览器助手、Python worker、Python hub 回退 |
@@ -143,8 +143,8 @@ bin/lanbusd --bind 0.0.0.0 --port 8788 --data-dir ~/.lanbus \
 ### 启动 worker
 
 ```bash
-bin/lanbus-worker --name win-claude --env windows \
-  --hub http://HUB:8788 --token WORKER_TOKEN --cwd D:/proj --agent claude
+bin/lanbus-worker --name win-a-cli --env windows \
+  --hub http://HUB:8788 --token WORKER_TOKEN --cwd D:/proj --agent ADAPTER
 ```
 
 本机 supervisor（Go/Python/WSL）：
@@ -170,7 +170,7 @@ lan_chat(envs, message, rounds)
 
 ```bash
 lanbus confirm list
-lanbus confirm approve --env macos-test-claude --ttl 1800
+lanbus confirm approve --env macos-a-cli --ttl 1800
 ```
 
 ### Web / 桌面

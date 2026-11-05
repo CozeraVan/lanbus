@@ -139,7 +139,24 @@ Task execution goes through the worker process tree, not through synthetic UI ke
 
 GUI automation is intentionally not the execution path. It can make a message visible in an existing desktop window, but it has no reliable interrupt semantics and is tied to window focus. `lan_interrupt` is only meaningful for tasks tracked by the hub/worker.
 
-The `kimi` worker adapter uses `lanbus.prompt_cli`: the prompt file is read and passed as one argv to `kimi -p`, avoiding shell quoting/newline problems on macOS and Windows. `deepseek` uses `dsh headless -` via stdin.
+## Adapters
+
+A worker adapter is just "how to start one agent CLI non-interactively". Built-in
+`--agent` values:
+
+| value | how the prompt is delivered |
+|---|---|
+| `claude` | one-shot print mode with an auto-accept edit permission mode; prompt on stdin |
+| `codex` | non-interactive `exec` mode, skip repo check; prompt on stdin |
+| `kimi` | single-argv prompt via the `lanbus.prompt_cli` helper (avoids shell quoting / line-length limits) |
+| `deepseek` | headless mode with stdin |
+| `shell` | run the prompt itself as a shell command |
+| `echo` | connectivity check |
+
+Anything else goes through `--cmd`: `{prompt_file}` is replaced by a temp file
+holding the composed prompt, otherwise the prompt is written to stdin. Use
+`--cmd` for a desktop app's bundled CLI, a vendor wrapper, or an agent whose flags
+differ from the built-ins.
 
 ## PTY mode
 

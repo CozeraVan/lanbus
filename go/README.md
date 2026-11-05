@@ -56,7 +56,7 @@ go build -trimpath -ldflags="-s -w" -o ../bin/lanbus-worker ./cmd/lanbus-worker
 Run against the existing Python hub:
 
 ```bash
-./bin/lanbus-worker --name go-win --env windows   --hub http://127.0.0.1:8788 --token TOKEN   --cwd D:/proj --agent claude
+./bin/lanbus-worker --name go-win --env windows   --hub http://127.0.0.1:8788 --token TOKEN   --cwd D:/proj --agent ADAPTER
 ```
 
 It implements register/claim/progress/log/submit/heartbeat/recover/outbox,

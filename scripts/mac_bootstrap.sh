@@ -6,9 +6,9 @@
 set -euo pipefail
 HUB="${1:-http://127.0.0.1:8788}"
 TOKEN="${2:-${LANBUS_TOKEN:-}}"
-AGENT="${3:-${LANBUS_AGENT:-claude}}"
-NAME="${4:-${LANBUS_NAME:-mac-claude}}"
-ENVNAME="${5:-${LANBUS_ENV:-macos-claude}}"
+AGENT="${3:-${LANBUS_AGENT:-claude}}"   # built-in adapter value, or pass --cmd separately
+NAME="${4:-${LANBUS_NAME:-mac-agent}}"
+ENVNAME="${5:-${LANBUS_ENV:-macos-agent}}"
 CWD="${6:-${LANBUS_CWD:-$HOME}}"
 if [ -z "$TOKEN" ]; then echo "worker token required" >&2; exit 2; fi
 case "$(uname -m)" in
@@ -19,7 +19,7 @@ esac
 BIN="${TMPDIR:-/tmp}/lanbus-worker-$ARCH"
 curl -fsSL "$HUB/download/lanbus-worker-$ARCH" -o "$BIN"
 chmod +x "$BIN"
-export PATH="$HOME/.local/bin:$HOME/.claude/local:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 echo "[lanbus] starting worker $NAME env=$ENVNAME agent=$AGENT cwd=$CWD hub=$HUB"
 exec "$BIN" --name "$NAME" --env "$ENVNAME" --hub "$HUB" --token "$TOKEN" \
   --cwd "$CWD" --agent "$AGENT"

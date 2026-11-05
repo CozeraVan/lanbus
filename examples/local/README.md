@@ -25,20 +25,20 @@ Windows Startup / a login script.
   "token_file": "C:/Users/me/.lanbus/token.txt",
   "workers": [
     {
-      "name": "win-claude",
-      "env": "win-claude",
-      "agent": "claude",
+      "name": "win-a-cli",
+      "env": "win-a-cli",
+      "agent": "ADAPTER_A",
       "cwd": "D:/proj",
-      "binary": "D:/nixiang/lanbus/bin/lanbus-worker.exe"
+      "binary": "D:/lanbus/bin/lanbus-worker.exe"
     },
     {
-      "name": "wsl-kimi",
-      "env": "wsl-kimi",
-      "agent": "kimi",
+      "name": "wsl-b-cli",
+      "env": "wsl-b-cli",
+      "agent": "ADAPTER_B",
       "cwd": "/home/me",
       "wsl": "Ubuntu-24.04",
       "binary": "/home/me/bin/lanbus-worker-go",
-      "hub": "http://192.168.1.10:8788"
+      "hub": "http://HUB_LAN_IP:8788"
     }
   ]
 }
@@ -49,7 +49,8 @@ Windows Startup / a login script.
 - `wsl`: distro name; the process is launched with `wsl.exe -d <distro>`.
 - `hub`: optional per-worker override (useful for WSL NAT).
 - `pty`: `true` to pass `--pty` (ConPTY / Unix PTY).
-- `cmd`: custom agent command, e.g. `"dsh headless -"`.
+- `agent`: a built-in adapter value (see [adapters](../..//docs/architecture.md#adapters)).
+- `cmd`: any custom CLI, e.g. `"my-agent --print {prompt_file}"`.
 - `token_file`: defaults to `~/.lanbus/token.txt`.
 
 ## Windows startup

@@ -105,7 +105,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - **`lan_interrupt`** MCP tool + `lanbus interrupt` CLI: explicit Ctrl+C-equivalent for lanbus tasks. It uses the worker cancellation path and kills the whole process tree, independent of window focus/background state.
 - **Kimi worker adapter**: `--agent kimi` uses `lanbus.prompt_cli` to pass the prompt file as one argv to `kimi -p`, avoiding shell quoting and newline issues on Windows/macOS.
 - **DeepSeek worker adapter**: `--agent deepseek` uses `dsh headless -` over stdin.
-- **macOS Kimi worker templates**: `examples/macos/com.lanbus.kimi-worker.plist` and `start-kimi-worker.sh`.
+- **macOS worker templates**: `examples/macos/com.lanbus.worker.plist`, `com.lanbus.worker-go.plist`, and `start-worker.sh`.
 - **OS guess** in discovery: AirTunes/AirPlay ports (`5000/7000/62078/548`) mark a host as `macos`; SMB/RDP ports mark Windows.
 - **Tests**: 32 tests, including `lan_interrupt` and OS guess.
 

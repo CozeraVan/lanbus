@@ -17,5 +17,7 @@ Reference:
 - [Go README](../go/README.md) — native scanner, worker, hub, and GUI.
 - [Packaging](../packaging/windows/README.md) — portable ZIP, Inno Setup, signing,
   updater.
+- [MCP client preset](../integrations/README.md) — optional sub-agent prompts and
+  slash-command text for any MCP client.
 - [Examples](../examples) — local supervisor, macOS launchd, WSL systemd,
   Windows scheduled task.

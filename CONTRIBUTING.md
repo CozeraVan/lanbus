@@ -32,7 +32,7 @@ go/internal/worker/     Go worker protocol/logs/process-tree/artifacts
 src/lanbus/cli.py       `lanbus {hub,worker,doctor,logs,shot,browser}`
 tests/                  protocol + end-to-end + logs/cancel/recovery/artifacts/discovery
 go/                     Go scanner with its own tests (`make go-test`)
-integrations/           client-side files (Claude Code agents/commands/mcp config)
+integrations/           client-side MCP preset (agent prompts, slash commands, mcp config)
 docs/                   architecture, protocol, troubleshooting
 ```
 
@@ -44,4 +44,4 @@ docs/                   architecture, protocol, troubleshooting
 
 ## Reporting bugs
 
-Include: OS, Python version, `lanbus --version`, which side failed (hub / worker / client), and the relevant log lines. For worker issues, the agent command (`--cmd` or `--agent`) matters — `claude -p` behaves differently from `codex exec`.
+Include: OS, Python version, `lanbus --version`, which side failed (hub / worker / client), and the relevant log lines. For worker issues, the agent command (`--cmd` or `--agent`) matters: different CLIs have different non-interactive flags.

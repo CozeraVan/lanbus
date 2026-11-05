@@ -14,6 +14,8 @@ logs/
 
 # 含 token 的真实配置，只提交 .example
 .mcp.json
+.claude/
+.mcp/
 
 # python
 __pycache__/
@@ -37,3 +39,6 @@ Thumbs.db
 *.pfx
 *.pem
 .env
+# client-local preset copies
+.claude/
+.mcp/

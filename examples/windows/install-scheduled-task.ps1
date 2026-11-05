@@ -8,7 +8,8 @@ $WorkerToken = "REPLACE_WITH_WORKER_TOKEN"
 $Cwd         = "D:\proj\webui"
 
 $python = (Get-Command python).Source
-$workerArgs = "-m lanbus worker --name win-ui --env windows --hub $Hub --token $WorkerToken --cwd $Cwd --agent claude --artifact-glob dist/**/*.png"
+$Agent = "ADAPTER"
+$workerArgs = "-m lanbus worker --name win-ui --env windows --hub $Hub --token $WorkerToken --cwd $Cwd --agent $Agent --artifact-glob dist/**/*.png"
 
 $action = New-ScheduledTaskAction -Execute $python -Argument $workerArgs -WorkingDirectory $Cwd
 $trigger = New-ScheduledTaskTrigger -AtLogOn

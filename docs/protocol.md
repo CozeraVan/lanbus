@@ -203,8 +203,8 @@ Add `env:"windows"` to run the request from that worker (useful when only that m
 ### `POST /worker/register`
 
 ```json
-{"name":"win-ui","env":"windows","agent":"claude",
- "caps":["claude","browser:playwright"],"version":"1.9.0",
+{"name":"win-ui","env":"windows","agent":"ADAPTER",
+ "caps":["ADAPTER","browser:playwright"],"version":"1.9.0",
  "pid":1234,"hostname":"DESKTOP"}
 ```
 

@@ -6,12 +6,12 @@
 
 [English](README.md) · [中文](README.zh-CN.md) · [Overview](docs/overview.en.md) · [中文总览](docs/overview.zh-CN.md) · [Architecture](docs/architecture.md) · [Protocol](docs/protocol.md)
 
-You talk to a single agent (Claude Code CLI, Claude Code desktop, kimi-cli, or anything that speaks MCP). It dispatches work to agents running on your other machines — Windows for the Web UI, WSL for the Linux build, macOS for native packaging — then **verifies what actually changed** and either accepts the result or sends it back for rework.
+You talk to a single main agent - an **A agent CLI**, a **B agent CLI**, a **C agent desktop**, or anything that speaks MCP. It dispatches work to agents running on your other machines — Windows for the Web UI, WSL for the Linux build, macOS for native packaging — then **verifies what actually changed** and either accepts the result or sends it back for rework.
 
 Zero mandatory dependencies. Standard library only. Never leaves your LAN. Optional Playwright unlocks real browser actions; Chrome/Edge headless gives fallback screenshots. A built-in scanner finds AI agents already running on the LAN **without installing anything on them**.
 
 ```
-                    you ──► main agent (Claude Code)
+                    you ──► main agent (A agent CLI)
                                   │ MCP: lan_dispatch / lan_logs / lan_result / lan_review
                                   ▼
                         ┌───────────────────┐
@@ -61,24 +61,24 @@ lanbus discover --hub http://HUB:8788 --env windows
 
 It combines three evidence sources:
 
-1. **local processes** — Claude Code/Desktop, Codex, Cursor, Windsurf, Kimi, DeepSeek, Ollama, LM Studio, ComfyUI, etc.; on Windows it also reads running WSL processes (`scope=wsl:<distro>`);
+1. **local processes** — agent CLI and desktop processes (A agent CLI, B agent CLI, C agent desktop, local model runtimes, image/UI tools), matched by executable name and command line; on Windows it also reads running WSL processes (`scope=wsl:<distro>`);
 2. **local listening ports** — PID/process/port mapping;
-3. **LAN scan + HTTP fingerprints** — Ollama `/api/tags`, OpenAI-compatible `/v1/models`, Open WebUI, ComfyUI, llama.cpp, vLLM, Gradio, Jupyter, Chrome DevTools, MCP `serverInfo`, lanbus `/health`, and FastAPI/OpenAPI AI APIs (`/openapi.json`).
+3. **LAN scan + HTTP fingerprints** — local model runtimes (`/api/tags`), OpenAI-compatible `/v1/models`, chat/web UIs, inference servers, notebook servers, browser DevTools, MCP `serverInfo`, lanbus `/health`, and FastAPI/OpenAPI AI APIs (`/openapi.json`).
 
 A native Go scanner is included as Phase 0; Python falls back to the pure-Python scanner automatically. Build it once with `make go-scan` (or `make go-scan-all` for macOS/Linux cross-builds). The report includes `engine: "go"` or `engine: "python"`.
 
 A native **Go worker** is also available as Phase 1.5. It speaks the same hub protocol, streams logs, uploads artifacts, and handles `lan_interrupt` by killing the process tree:
 
 ```bash
-bin/lanbus-worker --name go-win --env windows --hub http://HUB:8788   --token WORKER_TOKEN --cwd "D:\proj" --agent claude
+bin/lanbus-worker --name go-win --env windows --hub http://HUB:8788   --token WORKER_TOKEN --cwd "D:\proj" --agent ADAPTER
 ```
 
-Build with `make go-worker` / `make go-worker-all`. The Go worker now handles `agent`, `shell`, `discover`, and `ask` tasks, including native LAN discovery and OpenAI/Ollama calls. Browser tasks remain on the Python worker.
+Build with `make go-worker` / `make go-worker-all`. The Go worker now handles `agent`, `shell`, `discover`, and `ask` tasks, including native LAN discovery and OpenAI-compatible runtime calls. Browser tasks remain on the Python worker.
 
 Add `--pty` to run agents on a real PTY (ConPTY on Windows, Unix PTY elsewhere):
 
 ```bash
-bin/lanbus-worker --name tui --env tui --hub http://HUB:8788   --token TOKEN --cwd D:/proj --agent kimi --pty
+bin/lanbus-worker --name tui --env tui --hub http://HUB:8788   --token TOKEN --cwd D:/proj --agent ADAPTER --pty
 ```
 
 PTY mode keeps full-screen/TUI CLIs working and still uses the same Job Object/process-group cancellation.
@@ -106,14 +106,14 @@ browser-task and legacy compatibility.
 
 ### Local multi-agent chat
 
-Start one worker per local agent (Windows Claude/DeepSeek/Kimi and WSL Kimi are separate envs), then let the hub relay a conversation:
+Start one worker per local agent - a Linux-side A agent CLI, a Windows-side B agent CLI, a C agent desktop, a WSL agent - each with its own env name, then let the hub relay a conversation:
 
 ```bash
-lanbus worker --name win-claude   --env win-claude   --hub http://127.0.0.1:8788 --agent claude   --cwd D:/proj
-lanbus worker --name win-deepseek --env win-deepseek --hub http://127.0.0.1:8788 --agent deepseek --cwd D:/proj
-lanbus worker --name win-kimi     --env win-kimi     --hub http://127.0.0.1:8788 --agent kimi     --cwd D:/proj
+lanbus worker --name win-a-cli --env win-a-cli --hub http://127.0.0.1:8788 --agent ADAPTER_A --cwd D:/proj
+lanbus worker --name win-b-cli --env win-b-cli --hub http://127.0.0.1:8788 --agent ADAPTER_B --cwd D:/proj
+lanbus worker --name win-c-ui  --env win-c-ui  --hub http://127.0.0.1:8788 --agent ADAPTER_C --cwd D:/proj
 
-lanbus chat --envs win-claude,win-deepseek,win-kimi   --message "用一句话介绍自己最擅长的能力" --rounds 2
+lanbus chat --envs win-a-cli,win-b-cli,win-c-ui --message "introduce your strongest capability" --rounds 2
 ```
 
 The same feature is the MCP tool `lan_chat` (2–4 envs, 1–6 rounds) and `POST /chat`. Every turn is a normal lanbus task, so `lan_logs`, `lan_result`, `lan_interrupt`, and review still work on the individual turn.
@@ -146,8 +146,8 @@ remote-target tasks in `waiting_confirmation`.
 
 ```bash
 lanbus confirm list
-lanbus confirm approve --env macos-test-claude --ttl 1800
-lanbus confirm revoke --env macos-test-claude
+lanbus confirm approve --env macos-a-cli --ttl 1800
+lanbus confirm revoke --env macos-a-cli
 ```
 
 The approval token is separate from the main-agent token:
@@ -200,7 +200,7 @@ lanbus ask --endpoint 192.168.1.50:11434 --prompt "用一句话介绍自己"
 lanbus ask --endpoint 192.168.1.60:1234 --prompt "review this diff" --model qwen2.5
 ```
 
-Important limit: a **GUI-only** agent that opens no port (Claude Desktop, Codex desktop) can only be seen as a process on the machine where it runs. To see it from another machine, run a lanbus worker there or run `lanbus discover` on that host. Remote discovery is inherently limited to what the network exposes.
+Important limit: a **GUI-only** agent that opens no port (a C agent desktop) can only be seen as a process on the machine where it runs. To see it from another machine, run a lanbus worker there or run `lanbus discover` on that host. Remote discovery is inherently limited to what the network exposes.
 
 ## Quick start (3 minutes)
 
@@ -235,18 +235,18 @@ LANBUS_TOKEN=... LANBUS_WORKER_TOKEN=... docker compose up -d
 ```powershell
 # Windows
 lanbus worker --name win-ui --env windows --hub http://HUB_LAN_IP:8788 `
-  --token a-different-worker-secret --cwd D:\proj\webui --agent claude
+  --token a-different-worker-secret --cwd D:\proj\webui --agent ADAPTER
 ```
 ```bash
 # WSL
 lanbus worker --name wsl-core --env wsl --hub http://HUB_LAN_IP:8788 \
-  --token a-different-worker-secret --cwd /mnt/d/proj --agent claude
+  --token a-different-worker-secret --cwd /mnt/d/proj --agent ADAPTER
 # macOS
 lanbus worker --name mac-ui --env macos --hub http://HUB_LAN_IP:8788 \
-  --token a-different-worker-secret --cwd ~/proj --agent claude
+  --token a-different-worker-secret --cwd ~/proj --agent ADAPTER
 ```
 
-`--agent` is `claude`, `codex`, `kimi`, `deepseek`, `shell`, or `echo`; `--cmd` accepts any CLI (`{prompt_file}` expands to a temp file holding the prompt, otherwise the prompt goes to stdin). The `kimi` adapter uses a helper that passes the prompt as a single argv, avoiding shell quoting/line-length problems.
+`--agent` selects a built-in adapter for a common agent CLI (see the [adapter reference](docs/architecture.md#adapters)); `shell` runs the prompt as a command and `echo` is a connectivity check. `--cmd` accepts any CLI you already have: `{prompt_file}` expands to a temp file holding the prompt, otherwise the prompt goes to stdin. Use `--cmd` for a C agent desktop's bundled CLI, a vendor-specific wrapper, or an agent whose flags differ from the built-in adapters.
 
 Each worker also gets:
 
@@ -255,19 +255,23 @@ Each worker also gets:
 - **Lease + auto-requeue** — crash the worker mid-task and the hub requeues after the lease expires (default 120s, configurable per task).
 - **Artifact upload** — screenshots/logs are base64-uploaded to the hub, so separate machines no longer need a shared filesystem.
 - **Browser helper** — `pip install playwright && playwright install chromium` (or install Chrome/Edge) lets `lan_shot` click, fill forms and screenshot. `lanbus doctor` reports what is available.
-- **Discovery** — `lanbus discover` / `lan_discover` finds AI agents on the LAN without touching them; `lan_ask` can query Ollama/OpenAI-compatible endpoints directly.
+- **Discovery** — `lanbus discover` / `lan_discover` finds AI agents on the LAN without touching them; `lan_ask` can query OpenAI-compatible model endpoints directly.
 - **Context handoff** — `context` + local `.lanbus/context.md` + git state are composed into the prompt automatically.
 
-### 3. Main agent — Claude Code
+### 3. Main agent — A agent CLI (or any MCP client)
 
 ```bash
 cd your-project
-cp -r /path/to/lanbus/integrations/claude-code/.mcp.json.example .mcp.json   # set HUB_LAN_IP + token
-cp -r /path/to/lanbus/integrations/claude-code/agents   .claude/agents
-cp -r /path/to/lanbus/integrations/claude-code/commands .claude/commands
+cp -r /path/to/lanbus/integrations/mcp-client-preset/.mcp.json.example .mcp.json
+# set HUB_LAN_IP + token, then point your MCP client at it
+cp -r /path/to/lanbus/integrations/mcp-client-preset/agents   .mcp/agents
+cp -r /path/to/lanbus/integrations/mcp-client-preset/commands .mcp/commands
 ```
 
-Approve the project MCP server once when Claude Code asks, then:
+`integrations/mcp-client-preset` is only a ready-made preset (sub-agent prompts and
+slash-command text) that you can adapt to your client. Any MCP client works:
+register `http://HUB_LAN_IP:8788/mcp` with the agent token and the same tools
+appear. Approve the project MCP server once when your client asks, then:
 
 ```
 /lan windows change the login button radius from 4px to 12px, run npm run build, screenshot when green
@@ -306,7 +310,7 @@ It resolves the environment, dispatches, watches logs, reads `verify_out` and `d
 | `lan_logs` | incremental real-time logs (`since` / `wait_s` long-poll) |
 | `lan_artifact` | list/read artifacts; images and text returned inline |
 | `lan_discover` | LAN AI-agent reconnaissance without preinstall: local processes + ports + HTTP fingerprints; `env` scans from a worker |
-| `lan_ask` | send a prompt to a discovered Ollama/OpenAI-compatible endpoint and get its reply |
+| `lan_ask` | send a prompt to a discovered OpenAI-compatible model endpoint and get its reply |
 | `lan_review` | the gate: `approve` / `rework` (+feedback) / `fail` |
 | `lan_list` | filter by status / env / kind |
 | `lan_cancel` | cancel; stops the remote process tree |
@@ -394,7 +398,7 @@ A remote agent is a fresh CLI process, so lanbus composes a self-contained promp
 ## Known limits
 
 1. Conversation context is not magically shared. lanbus injects structured `context`, local `.lanbus/context.md`, and git state, but if a detail only exists in your local chat you must pass it explicitly.
-2. `claude -p` is non-interactive; anything needing interactive approval fails instead of prompting. Use `--permission-mode acceptEdits` (the worker default) or pre-authorize in `.claude/settings.json`.
+2. Workers use each CLI's non-interactive one-shot mode (`-p` / `exec` / `headless`); anything needing interactive approval fails instead of prompting. Put the required permission mode or pre-authorization in that CLI's own config. Built-in adapters already pass a non-interactive permission mode where the CLI supports one.
 3. If WSL uses `/mnt/d/...` and Windows uses `D:\...`, that is one filesystem — no syncing needed, but concurrent edits to the same file will collide. Partition tasks by file.
 4. WSL→Windows needs either mirrored networking (`networkingMode=mirrored` in `.wslconfig`, then `wsl --shutdown`) or the host IP, which changes across reboots.
 
@@ -402,25 +406,26 @@ A remote agent is a fresh CLI process, so lanbus composes a self-contained promp
 6. Browser tasks require a worker with a `browser` capability; `lan_envs` reports `has_browser` and `caps`.
 7. Remote discovery can only see hosts that answer on scanned TCP ports or expose an HTTP(S) API. GUI-only agents are visible only in local process scans; run a lanbus worker or `lanbus discover` on that host for full coverage. Port 443 is fingerprinted over HTTPS; custom HTTPS ports are not probed by default.
 8. Discovery is heuristic: a port can be open for unrelated software, and an OpenAI-compatible endpoint may be an inference server rather than a full tool-using agent. Verify before sending sensitive prompts.
-9. macOS Kimi CLI needs a worker running on the Mac (`--agent kimi`) or a local `lanbus discover`; a Windows scanner cannot see a GUI/CLI process on the Mac without one of those. macOS Local Network permission must allow Terminal/agent.
+9. An agent CLI on macOS needs a worker running on the Mac (`--agent ADAPTER` or `--cmd`) or a local `lanbus discover`; a Windows scanner cannot see a GUI/CLI process on the Mac without one of those. macOS Local Network permission must allow Terminal/the worker.
 10. UI-only desktop windows have no stable programmable input/interrupt API. lanbus uses CLI/headless/worker for task execution; GUI automation is best-effort notification only.
 
-### macOS Kimi worker
+### macOS worker
 
-If Kimi CLI is already installed on macOS but has no response, it has no worker and is not reachable from Windows. Run this on the Mac:
+If an agent CLI is already installed on macOS but is not reachable from Windows, it has no worker. Run this on the Mac:
 
 ```bash
-export PATH="$HOME/.kimi-code/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 lanbus doctor
-lanbus worker --name mac-kimi --env macos --hub http://HUB_LAN_IP:8788 --token WORKER_TOKEN --cwd /Users/me/proj --agent kimi
+lanbus worker --name mac-a-cli --env macos --hub http://HUB_LAN_IP:8788 --token WORKER_TOKEN --cwd /Users/me/proj --agent ADAPTER
 ```
 
 Or use the native Go worker without Python:
 `bin/lanbus-worker-darwin-arm64` (Apple Silicon) or `bin/lanbus-worker-darwin-amd64`, with the launchd template
-`examples/macos/com.lanbus.kimi-worker-go.plist`.
+`examples/macos/com.lanbus.worker-go.plist` (native Go worker) or
+`examples/macos/com.lanbus.worker.plist` (Python worker); set `ADAPTER` and paths.
 
-For the Python worker, use `examples/macos/com.lanbus.kimi-worker.plist` instead.
-After it connects, `lan_envs` shows `mac-kimi` with `kimi` capability, and `lan_dispatch(env="macos", ...)` runs in the current project. `lan_discover` from Windows can only see the Mac's open ports; process-level Kimi detection happens on the Mac via its worker or local `lanbus discover`.
+Or run `examples/macos/start-worker.sh` in the foreground for a quick self-check.
+After it connects, `lan_envs` shows `mac-a-cli` with the adapter capability, and `lan_dispatch(env="macos", ...)` runs in the current project. `lan_discover` from Windows can only see the Mac's open ports; process-level agent detection happens on the Mac via its worker or local `lanbus discover`.
 
 ---
 

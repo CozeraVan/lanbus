@@ -9,7 +9,7 @@ $WorkerToken = "REPLACE_WITH_WORKER_TOKEN"   # 没有单独 worker token 时填�
 $Name        = "win-ui"
 $Env         = "windows"
 $Cwd         = "D:\proj\webui"
-$Agent       = "claude"          # claude | codex | shell | echo
+$Agent       = "ADAPTER"       # built-in adapter value, or shell/echo; see docs/architecture.md#adapters
 
 # WSL 若用 mirrored 网络，$Hub 可写 http://localhost:8788
 # 浏览器任务：先 pip install playwright && playwright install chromium（或装 Chrome/Edge）

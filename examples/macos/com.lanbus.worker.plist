@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
+  Python worker template. Replace ADAPTER (or use --cmd), HUB_LAN_IP, token, cwd.
   ~/Library/LaunchAgents/com.lanbus.worker.plist
   launchctl load -w ~/Library/LaunchAgents/com.lanbus.worker.plist
   launchctl list | grep lanbus
@@ -15,12 +16,12 @@
   <array>
     <string>/usr/local/bin/lanbus</string>
     <string>worker</string>
-    <string>--name</string>      <string>mac-ui</string>
-    <string>--env</string>       <string>macos</string>
+    <string>--name</string>      <string>mac-agent</string>
+    <string>--env</string>       <string>macos-agent</string>
     <string>--hub</string>       <string>http://HUB_LAN_IP:8788</string>
     <string>--token</string>     <string>REPLACE_WITH_TOKEN</string>
     <string>--cwd</string>       <string>/Users/me/proj</string>
-    <string>--agent</string>     <string>claude</string>
+    <string>--agent</string>     <string>ADAPTER</string>
   </array>
 
   <key>RunAtLoad</key>

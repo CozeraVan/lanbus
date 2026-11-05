@@ -6,12 +6,12 @@
 
 [English](README.md) · [中文](README.zh-CN.md) · [Overview](docs/overview.en.md) · [中文总览](docs/overview.zh-CN.md) · [架构](docs/architecture.md) · [协议](docs/protocol.md)
 
-你跟一个 agent 说话（Claude Code CLI、Claude Code 桌面端、kimi-cli，或任何会说 MCP 的客户端），它把任务派给跑在别的机器上的 agent —— Windows 负责 Web UI、WSL 负责 Linux 构建、macOS 负责原生打包 —— 然后**核对真实改动**，决定通过还是打回重做。
+你跟一个主 agent 说话（A agent CLI、B agent CLI、C agent 桌面端，或任何会说 MCP 的客户端），它把任务派给跑在别的机器上的 agent —— Windows 负责 Web UI、WSL 负责 Linux 构建、macOS 负责原生打包 —— 然后**核对真实改动**，决定通过还是打回重做。
 
 零硬依赖，只用 Python 标准库，不出局域网。可选 Playwright 解锁真实浏览器动作；本机 Chrome/Edge 提供降级截图。内置扫描器可以在**不往对方机器装任何东西**的前提下，发现局域网里已经打开的 AI agent。
 
 ```
-                    你 ──► 主 agent（Claude Code）
+                    你 ──► 主 agent（A agent CLI）
                                   │ MCP: lan_dispatch / lan_logs / lan_result / lan_review
                                   ▼
                         ┌───────────────────┐
@@ -61,24 +61,24 @@ lanbus discover --hub http://HUB:8788 --env windows
 
 三类证据源：
 
-1. **本机进程** —— Claude Code/Desktop、Codex、Cursor、Windsurf、Kimi、DeepSeek、Ollama、LM Studio、ComfyUI 等；Windows 下还会读取正在运行的 WSL 进程（`scope=wsl:<发行版>`）；
+1. **本机进程** —— agent CLI 与桌面进程（A agent CLI、B agent CLI、C agent 桌面端，以及本地模型运行时、图像/UI 工具等），按可执行文件名与命令行匹配；Windows 下还会读取正在运行的 WSL 进程（`scope=wsl:<发行版>`）；
 2. **本机监听端口** —— PID / 进程 / 端口对应；
-3. **LAN 扫描 + HTTP 指纹** —— Ollama `/api/tags`、OpenAI-compatible `/v1/models`、Open WebUI、ComfyUI、llama.cpp、vLLM、Gradio、Jupyter、Chrome DevTools、MCP `serverInfo`、lanbus `/health`，以及 FastAPI/OpenAPI AI API（`/openapi.json`）。
+3. **LAN 扫描 + HTTP 指纹** —— 本地模型运行时（`/api/tags`）、OpenAI-compatible `/v1/models`、对话/Web UI、推理服务、Notebook 服务、浏览器 DevTools、MCP `serverInfo`、lanbus `/health`，以及 FastAPI/OpenAPI AI API（`/openapi.json`）。
 
 内置 Phase 0 Go 扫描器；Python 会自动回退到纯 Python 扫描。执行 `make go-scan` 构建原生扫描器（macOS/Linux 交叉编译用 `make go-scan-all`），报告里 `engine` 会显示 `go` 或 `python`。
 
 Phase 1.5 还提供原生 **Go worker**：同一套 hub 协议、实时日志、产物上传，`lan_interrupt` 直接杀进程树：
 
 ```bash
-bin/lanbus-worker --name go-win --env windows --hub http://HUB:8788 --token WORKER_TOKEN --cwd "D:\proj" --agent claude
+bin/lanbus-worker --name go-win --env windows --hub http://HUB:8788 --token WORKER_TOKEN --cwd "D:\proj" --agent ADAPTER
 ```
 
-用 `make go-worker` / `make go-worker-all` 构建。Go worker 已支持 `agent`、`shell`、`discover`、`ask`，包括原生局域网侦查和 OpenAI/Ollama 调用；browser 任务仍由 Python worker 处理。
+用 `make go-worker` / `make go-worker-all` 构建。Go worker 已支持 `agent`、`shell`、`discover`、`ask`，包括原生局域网侦查和 OpenAI-compatible 模型端点调用；browser 任务仍由 Python worker 处理。
 
 加 `--pty` 可在真实 PTY 上运行 agent（Windows 用 ConPTY，其他平台用 Unix PTY）：
 
 ```bash
-bin/lanbus-worker --name tui --env tui --hub http://HUB:8788 --token TOKEN --cwd D:/proj --agent kimi --pty
+bin/lanbus-worker --name tui --env tui --hub http://HUB:8788 --token TOKEN --cwd D:/proj --agent ADAPTER --pty
 ```
 
 PTY 模式保留全屏/TUI CLI 的交互，同时继续使用 Job Object/进程组取消。
@@ -104,14 +104,14 @@ Python hub（`lanbus hub` / `start-hub-python.cmd`）保留为 browser/legacy �
 
 ### 本机多 agent 对话
 
-每个本机 agent 启一个 worker（Windows Claude/DeepSeek/Kimi、WSL Kimi 是不同 env），然后由 hub 按顺序接力：
+每个本机 agent 启一个 worker（Linux 侧 A agent CLI、Windows 侧 B agent CLI、C agent 桌面端、WSL agent 各自一个 env），然后由 hub 按顺序接力：
 
 ```bash
-lanbus worker --name win-claude   --env win-claude   --hub http://127.0.0.1:8788 --agent claude   --cwd D:/proj
-lanbus worker --name win-deepseek --env win-deepseek --hub http://127.0.0.1:8788 --agent deepseek --cwd D:/proj
-lanbus worker --name win-kimi     --env win-kimi     --hub http://127.0.0.1:8788 --agent kimi     --cwd D:/proj
+lanbus worker --name win-a-cli --env win-a-cli --hub http://127.0.0.1:8788 --agent ADAPTER_A --cwd D:/proj
+lanbus worker --name win-b-cli --env win-b-cli --hub http://127.0.0.1:8788 --agent ADAPTER_B --cwd D:/proj
+lanbus worker --name win-c-ui  --env win-c-ui  --hub http://127.0.0.1:8788 --agent ADAPTER_C --cwd D:/proj
 
-lanbus chat --envs win-claude,win-deepseek,win-kimi   --message "用一句话介绍自己最擅长的能力" --rounds 2
+lanbus chat --envs win-a-cli,win-b-cli,win-c-ui --message "介绍一下你最擅长的能力" --rounds 2
 ```
 
 同样能力对应 MCP 工具 `lan_chat`（2–4 个 env，1–6 轮）和 `POST /chat`。每一轮都是普通 lanbus 任务，`lan_logs`、`lan_result`、`lan_interrupt` 和 review 仍可用于单轮。
@@ -143,8 +143,8 @@ hub 在 `http://HUB:8788/ui` 提供零依赖面板（HTML 公开，API 使用 ag
 
 ```bash
 lanbus confirm list
-lanbus confirm approve --env macos-test-claude --ttl 1800
-lanbus confirm revoke --env macos-test-claude
+lanbus confirm approve --env macos-a-cli --ttl 1800
+lanbus confirm revoke --env macos-a-cli
 ```
 
 审批 token 与主 agent token 分离：
@@ -195,7 +195,7 @@ lanbus ask --endpoint 192.168.1.50:11434 --prompt "用一句话介绍自己"
 lanbus ask --endpoint 192.168.1.60:1234 --prompt "review this diff" --model qwen2.5
 ```
 
-重要边界：**纯 GUI、不监听端口的 agent**（Claude Desktop、Codex desktop）只能在它运行的那台机器上通过进程扫描看到；要从其它机器看到它，需要那台机器跑一个 lanbus worker，或在本机执行 `lanbus discover`。远程侦查天然只能看到网络暴露出来的东西。
+重要边界：**纯 GUI、不监听端口的 agent**（C agent 桌面端）只能在它运行的那台机器上通过进程扫描看到；要从其它机器看到它，需要那台机器跑一个 lanbus worker，或在本机执行 `lanbus discover`。远程侦查天然只能看到网络暴露出来的东西。
 
 ## 快速开始（3 分钟）
 
@@ -231,23 +231,22 @@ LANBUS_TOKEN=... LANBUS_WORKER_TOKEN=... docker compose up -d
 ```powershell
 # Windows
 lanbus worker --name win-ui --env windows --hub http://HUB_LAN_IP:8788 `
-  --token worker专用口令 --cwd D:\你的项目\webui --agent claude
+  --token worker专用口令 --cwd D:\你的项目\webui --agent ADAPTER
 ```
 ```bash
 # WSL
 lanbus worker --name wsl-core --env wsl --hub http://HUB_LAN_IP:8788 \
-  --token worker专用口令 --cwd /mnt/d/你的项目 --agent claude
+  --token worker专用口令 --cwd /mnt/d/你的项目 --agent ADAPTER
 # macOS
 lanbus worker --name mac-ui --env macos --hub http://HUB_LAN_IP:8788 \
-  --token worker专用口令 --cwd ~/你的项目 --agent claude
+  --token worker专用口令 --cwd ~/你的项目 --agent ADAPTER
 ```
 
-`--agent` 可选 `claude`、`codex`、`kimi`、`deepseek`、`shell`、`echo`；`--cmd` 接任意 CLI：
+`--agent` 选一个内置适配器（适配器清单见[架构文档](docs/architecture.md#adapters)）；`shell` 把 prompt 当命令执行，`echo` 用于连通性检查。`--cmd` 可接任意你已有的 CLI：
 
 ```bash
---cmd 'claude -p --permission-mode acceptEdits'   # 默认
---cmd 'codex exec --skip-git-repo-check -'        # 走 stdin
---cmd 'kimi --print {prompt_file}'                # {prompt_file} 换成 prompt 文件路径
+--cmd 'my-agent --print {prompt_file}'   # {prompt_file} 换成 prompt 文件路径
+--cmd 'my-agent --headless -'             # 留空 stdout 之外的 stdin 用法则直接走 stdin
 ```
 
 每个 worker 还自带：
@@ -257,7 +256,7 @@ lanbus worker --name mac-ui --env macos --hub http://HUB_LAN_IP:8788 \
 - **租约 + 自动重排**：worker 中途崩溃，租约过期后 hub 自动把任务放回队列（默认 120 秒，可按任务改）。
 - **产物上传**：截图/日志以 base64 上传到 hub，跨机器不再依赖共享文件系统。
 - **浏览器助手**：`pip install playwright && playwright install chromium`（或装 Chrome/Edge）后，`lan_shot` 可点击、填表并截图；`lanbus doctor` 会报告当前能力。
-- **即时侦查**：`lanbus discover` / `lan_discover` 在不碰对方的前提下发现局域网 AI agent；`lan_ask` 可直接向 Ollama/OpenAI-compatible 端点提问。
+- **即时侦查**：`lanbus discover` / `lan_discover` 在不碰对方的前提下发现局域网 AI agent；`lan_ask` 可直接向 OpenAI-compatible 模型端点提问。
 - **上下文交接**：`context` + 本地 `.lanbus/context.md` + git 状态会自动拼进 prompt。
 
 WSL 连 Windows：Win11 22H2+ 在 `%UserProfile%\.wslconfig` 写
@@ -269,16 +268,19 @@ networkingMode=mirrored
 
 然后 `wsl --shutdown`，之后两边都能用 `localhost`。不开镜像网络就取 `ip route show default | awk '{print $3}'`，但那个 IP 重启会变。
 
-### 3. 主 agent —— Claude Code
+### 3. 主 agent —— A agent CLI（或任意 MCP 客户端）
 
 ```bash
 cd 你的项目根
-cp -r /path/to/lanbus/integrations/claude-code/.mcp.json.example .mcp.json   # 改 HUB_LAN_IP 与口令
-cp -r /path/to/lanbus/integrations/claude-code/agents   .claude/agents
-cp -r /path/to/lanbus/integrations/claude-code/commands .claude/commands
+cp -r /path/to/lanbus/integrations/mcp-client-preset/.mcp.json.example .mcp.json
+# 改 HUB_LAN_IP 与口令，再把 MCP 客户端指过来
+cp -r /path/to/lanbus/integrations/mcp-client-preset/agents   .mcp/agents
+cp -r /path/to/lanbus/integrations/mcp-client-preset/commands .mcp/commands
 ```
 
-首次在项目里跑 `claude` 时批准一次项目级 MCP 服务器，然后：
+`integrations/mcp-client-preset` 只是一份现成预设（子 agent 提示词 + 斜杠命令文本），
+可自行适配你的客户端。任何 MCP 客户端都能用：把 `http://HUB_LAN_IP:8788/mcp`
+与 agent 口令注册进去，工具列表一致。首次运行时批准一次项目级 MCP 服务器，然后：
 
 ```
 /lan windows 把登录页按钮圆角从 4px 改成 12px，跑 npm run build，过了截图给我
@@ -317,7 +319,7 @@ cp -r /path/to/lanbus/integrations/claude-code/commands .claude/commands
 | `lan_logs` | 增量实时日志（`since` 续传 / `wait_s` 长轮询） |
 | `lan_artifact` | 列出/读取产物；图片与文本内联返回 |
 | `lan_discover` | 无插件侦查局域网 AI agent：本机进程 + 端口 + HTTP 指纹；`env` 可从指定 worker 扫描 |
-| `lan_ask` | 向发现的 Ollama/OpenAI-compatible 端点发 prompt 并取回反馈 |
+| `lan_ask` | 向发现的 OpenAI-compatible 模型端点发 prompt 并取回反馈 |
 | `lan_review` | 验收闸门：`approve` / `rework`（带意见）/ `fail` |
 | `lan_list` | 按状态、环境、类型过滤 |
 | `lan_cancel` | 取消；会终止远端进程树 |
@@ -404,31 +406,32 @@ queued ──claim──► claimed ──► running ──submit──► subm
 ## 已知边界
 
 1. 对话上下文不会自动魔法共享。lanbus 现在会注入结构化 `context`、本地 `.lanbus/context.md` 和 git 状态，但只存在于你本地聊天里的细节仍需显式传入。
-2. `claude -p` 是非交互的，需要授权的动作会失败而不是弹窗。worker 默认已带 `--permission-mode acceptEdits`，要跑 Bash 就在 `.claude/settings.json` 预授权。
+2. worker 走各 CLI 的非交互一次性模式（`-p` / `exec` / `headless`）；需要授权的动作会失败而不是弹窗。把权限模式或预授权写进该 CLI 自己的配置；内置适配器在 CLI 支持时会自动带上非交互权限参数。
 3. WSL 的 `/mnt/d/...` 与 Windows 的 `D:\...` 是同一份文件，不需要同步；但两边同时改同一个文件会互相踩，派单时按文件划分。
 4. WSL→Windows 需要镜像网络或动态取宿主 IP，见上文。
 5. headless 浏览器降级只支持 `goto` + 截图。点击/填表/执行 JS 需要 Playwright（`pip install playwright && playwright install chromium`）。
 6. 浏览器任务要求 worker 具备 `browser` 能力；`lan_envs` 会返回 `has_browser` 与 `caps`。
-7. macOS Kimi CLI 需要在那台 Mac 上运行 worker（`--agent kimi`）或本机 `lanbus discover`；Windows 扫描器只能看到 Mac 的开放端口，看不到 GUI/CLI 进程。macOS 首次还需在“隐私与安全性 → 本地网络”允许终端/agent。
+7. macOS 上的 agent CLI 需要在那台 Mac 上运行 worker（`--agent ADAPTER` 或 `--cmd`）或本机 `lanbus discover`；Windows 扫描器只能看到 Mac 的开放端口，看不到 GUI/CLI 进程。macOS 首次还需在“隐私与安全性 → 本地网络”允许终端/worker。
 8. 纯 UI 桌面窗口没有稳定的可编程输入/中断接口。lanbus 的任务执行走 CLI/headless/worker；GUI 自动化只用于尽力通知。
 7. 远程侦查只能看到在扫描端口上应答、或暴露 HTTP(S) API 的主机。纯 GUI agent 只有在本机进程扫描中可见；要覆盖某台机器，需要在那台机器跑 lanbus worker 或直接执行 `lanbus discover`。443 端口会用 HTTPS 指纹；自定义 HTTPS 端口默认不探测。
 8. 侦查是启发式的：开放端口可能属于无关软件，OpenAI-compatible 端点也可能只是推理服务而不是完整工具型 agent。发送敏感 prompt 前先确认。
 
 ---
 
-### macOS Kimi worker
+### macOS worker
 
-如果 Mac 上 Kimi CLI 没反应，通常是因为那台 Mac 没有 worker，Windows 端的扫描/UI 注入触达不到它。在 Mac 上执行：
+如果 Mac 上的 agent CLI 连不上，通常是因为那台 Mac 没有 worker。在 Mac 上执行：
 
 ```bash
-export PATH="$HOME/.kimi-code/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 lanbus doctor
-lanbus worker --name mac-kimi --env macos --hub http://HUB_LAN_IP:8788 --token WORKER_TOKEN --cwd /Users/me/proj --agent kimi
+lanbus worker --name mac-a-cli --env macos --hub http://HUB_LAN_IP:8788 --token WORKER_TOKEN --cwd /Users/me/proj --agent ADAPTER
 ```
 
-也可以使用原生 Go worker（Mac 不需要 Python）：`bin/lanbus-worker-darwin-arm64`（Apple Silicon）或 `bin/lanbus-worker-darwin-amd64`，配合 `examples/macos/com.lanbus.kimi-worker-go.plist`。
+也可以使用原生 Go worker（Mac 不需要 Python）：`bin/lanbus-worker-darwin-arm64`（Apple Silicon）或 `bin/lanbus-worker-darwin-amd64`，配合 `examples/macos/com.lanbus.worker-go.plist`（原生 Go worker）或
+`examples/macos/com.lanbus.worker.plist`（Python worker），改 `ADAPTER` 与路径即可。
 
-Python worker 使用 `examples/macos/com.lanbus.kimi-worker.plist`。连接后 `lan_envs` 会显示 `mac-kimi`（caps 含 `kimi`），之后 `lan_dispatch(env="macos", ...)` 就能在 Mac 当前项目运行；`lan_cancel`/`lan_interrupt` 会杀它的进程树。
+也可以先跑 `examples/macos/start-worker.sh` 前台自检。连接后 `lan_envs` 会显示 `mac-a-cli`（caps 含适配器名），之后 `lan_dispatch(env="macos", ...)` 就能在 Mac 当前项目运行；`lan_cancel`/`lan_interrupt` 会杀它的进程树。
 
 ## 开发与验证
 

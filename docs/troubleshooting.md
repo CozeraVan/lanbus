@@ -12,7 +12,7 @@ Order of checks: **hub alive → worker registered → task claimed → logs flo
 | `lan_cancel` returns cancelled but the process keeps running | worker is stuck on a network call, or it is an old worker without progress polling | upgrade the worker; check `progress` responses; the hub reaper will eventually requeue if the lease expires, but the process tree is only killed by a worker that polls |
 | Task bounces `running → queued → running` | lease is too short for the machine/network, or the worker's progress thread cannot reach the hub | raise `lease_s` on dispatch (e.g. 300); check LAN/firewall; reaper interval is `--reap-s` |
 | Task ends `failed` with "执行租约丢失 … 超过恢复上限" | worker crashed more than `max_recoveries` times | inspect `lan_logs`/`~/.lanbus/logs`; fix the worker; dispatch a new task or raise `max_recoveries` |
-| Task sticks in `running` | agent CLI is blocked (interactive prompt) or hung; worker alive and renewing lease | check `--cmd`; `claude -p` needs `--permission-mode acceptEdits`; `lan_cancel` to kill it |
+| Task sticks in `running` | agent CLI is blocked (interactive prompt) or hung; worker alive and renewing lease | check `--cmd`; one-shot modes may still need an explicit permission/auto-approve flag for that CLI; `lan_cancel` to kill it |
 | `verify_ok=0` but the agent printed success | acceptance command is wrong, or runs in the wrong `cwd` | check `cwd` is the repo root and the command works when run by hand there |
 | `diff` is empty after edits | `cwd` is not a git repo, or edits landed outside it | `git -C cwd status`; set `cwd` to the repo root |
 | `artifacts` is empty | glob did not match, file older than the task, or larger than the cap | pass task `artifact_globs`; write files under `cwd`; default patterns include `.lanbus-shot.*`, `screenshot*.png`, `build.log`; check `--max-artifact-mb` |
@@ -26,7 +26,7 @@ Order of checks: **hub alive → worker registered → task claimed → logs flo
 | `lan_ask` says no model / 401 | endpoint has no model loaded or needs auth | run `lan_discover` and inspect `models`; pass `--model`; use `api_key` |
 | `lan_discover env=...` stays queued | no worker reports `discover` capability | upgrade worker; check `lan_envs` `caps` contains `discover` |
 | macOS sees no LAN hosts | macOS 14+ Local Network privacy permission denied | System Settings → Privacy & Security → Local Network, allow Terminal/your agent |
-| macOS Kimi CLI produces no response | no lanbus worker on the Mac, or launchd PATH lacks `kimi` | run `lanbus doctor` and `lanbus worker --agent kimi` on the Mac; use `examples/macos/com.lanbus.kimi-worker.plist`; ensure `~/.kimi-code/bin` is in PATH |
+| macOS agent CLI produces no response | no lanbus worker on the Mac, or launchd PATH lacks the CLI | run `lanbus doctor` and `lanbus worker --agent ADAPTER` (or `--cmd`) on the Mac; use `examples/macos/com.lanbus.worker-go.plist`; make sure the CLI's bin directory is in `PATH` |
 | Need to stop a task like Ctrl+C | UI keystroke injection is focus-dependent | use `lan_interrupt` / `lan_cancel` on the task; worker kills the process tree in foreground or background |
 | Chinese text arrives as mojibake | client decoded the body as latin-1 | hub sends `charset=utf-8`; if you proxy it, preserve that header; worker sets `PYTHONIOENCODING=utf-8` |
 | Two agents clobber each other's edits | same files via `/mnt/d` and `D:\` | one tree — partition tasks by file, don't run two edits on one file |

@@ -2,8 +2,8 @@
 
 [中文总览](overview.zh-CN.md) · [Back to README](../README.md) · [Architecture](architecture.md) · [Protocol](protocol.md)
 
-lanbus is a LAN-wide orchestration bus for AI agents. A main agent (Claude Code,
-pi, kimi-cli, or any MCP client) dispatches work to agents running on other
+lanbus is a LAN-wide orchestration bus for AI agents. A main agent (an A agent CLI, a B agent CLI, a C agent desktop,
+or any MCP client) dispatches work to agents running on other
 machines, then reviews machine-checkable evidence before accepting it.
 
 ## 1. Principle
@@ -48,12 +48,12 @@ path. Remote approval has a TTL and can be revoked.
 
 The built-in scanner combines:
 
-1. local processes (Claude Code/Desktop, Codex, Kimi, DeepSeek, Ollama, LM Studio,
-   ComfyUI, …; Windows also reads running WSL processes);
+1. local processes (agent CLI and desktop executables, local model runtimes,
+   image/UI tools; Windows also reads running WSL processes);
 2. local PID-to-port mappings;
-3. LAN TCP probes plus HTTP fingerprints (Ollama, OpenAI-compatible,
-   Open WebUI, ComfyUI, llama.cpp, vLLM, Gradio, Jupyter, Chrome DevTools,
-   MCP `serverInfo`, lanbus `/health`, and FastAPI/OpenAPI AI APIs).
+3. LAN TCP probes plus HTTP fingerprints (local model runtimes,
+   OpenAI-compatible servers, chat/web UIs, inference servers, notebook servers,
+   browser DevTools, MCP `serverInfo`, lanbus `/health`, and FastAPI/OpenAPI AI APIs).
 
 A GUI-only agent that opens no port can only be seen by a process scan on its
 own machine. Running a worker or `lanbus discover` there closes that gap.
@@ -65,7 +65,7 @@ own machine. Running a worker or `lanbus discover` there closes that gap.
 | Component | Language | Role |
 |---|---|---|
 | `lanbusd` | Go | Default hub: SQLite task store, worker API, MCP, SSE, artifacts, operator approvals, Web UI |
-| `lanbus-worker` | Go | Pull worker: process supervisor, Job Objects/PTY, adapters (Claude/Codex/Kimi/DeepSeek/shell), discover/ask, artifacts |
+| `lanbus-worker` | Go | Pull worker: process supervisor, Job Objects/PTY, agent-CLI adapters (or `--cmd`), discover/ask, artifacts |
 | `lanbus-scan` | Go | Zero-install LAN scanner used by discovery |
 | `lanbus-gui` | Go + Wails/WebView2 | Windows desktop window + tray, embedded dashboard |
 | `lanbus` | Python | CLI, discovery fallback, browser helper, Python worker, Python hub fallback |
@@ -150,8 +150,8 @@ The hub prints a data directory; the first start generates
 ### Start workers
 
 ```bash
-bin/lanbus-worker --name win-claude --env windows \
-  --hub http://HUB:8788 --token WORKER_TOKEN --cwd D:/proj --agent claude
+bin/lanbus-worker --name win-a-cli --env windows \
+  --hub http://HUB:8788 --token WORKER_TOKEN --cwd D:/proj --agent ADAPTER
 ```
 
 For local supervisor (Go/Python/WSL):
@@ -178,7 +178,7 @@ until a human approves:
 
 ```bash
 lanbus confirm list
-lanbus confirm approve --env macos-test-claude --ttl 1800
+lanbus confirm approve --env macos-a-cli --ttl 1800
 ```
 
 ### Web / desktop
