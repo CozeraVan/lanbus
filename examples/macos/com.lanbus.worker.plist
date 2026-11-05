@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~/Library/LaunchAgents/com.lanbus.worker.plist
+  launchctl load -w ~/Library/LaunchAgents/com.lanbus.worker.plist
+  launchctl list | grep lanbus
+  日志: /tmp/lanbus-worker.out /tmp/lanbus-worker.err
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lanbus.worker</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/lanbus</string>
+    <string>worker</string>
+    <string>--name</string>      <string>mac-ui</string>
+    <string>--env</string>       <string>macos</string>
+    <string>--hub</string>       <string>http://HUB_LAN_IP:8788</string>
+    <string>--token</string>     <string>REPLACE_WITH_TOKEN</string>
+    <string>--cwd</string>       <string>/Users/me/proj</string>
+    <string>--agent</string>     <string>claude</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/lanbus-worker.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/lanbus-worker.err</string>
+</dict>
+</plist>

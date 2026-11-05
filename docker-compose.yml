@@ -1,0 +1,31 @@
+services:
+  hub:
+    build: .
+    image: lanbus:1.9.0
+    container_name: lanbus-hub
+    restart: unless-stopped
+    ports:
+      - "8788:8788"
+    environment:
+      # 生产环境请用强口令；也可用 env_file 注入
+      LANBUS_TOKEN: "${LANBUS_TOKEN:-change-me-please}"
+      # 可选：worker 专用 token；worker 只能调 /worker/*，不能调 /mcp
+      LANBUS_WORKER_TOKEN: "${LANBUS_WORKER_TOKEN:-}"
+      LANBUS_WORKER_TOKENS: "${LANBUS_WORKER_TOKENS:-}"
+      # 允许额外 Host 头（默认已放行 localhost 与所有 IP 字面量）
+      LANBUS_HOSTS: "${LANBUS_HOSTS:-}"
+      # 产物上限 / 租约参数（可选）
+      LANBUS_MAX_ARTIFACT_MB: "${LANBUS_MAX_ARTIFACT_MB:-32}"
+      LANBUS_LEASE_S: "${LANBUS_LEASE_S:-120}"
+      LANBUS_REAP_S: "${LANBUS_REAP_S:-10}"
+    volumes:
+      - lanbus-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8788/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  lanbus-data:

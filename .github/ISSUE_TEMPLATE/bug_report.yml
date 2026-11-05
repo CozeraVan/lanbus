@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a reproducible lanbus problem
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Remove tokens, private IPs, and personal data before submitting."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Expected vs actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction
+      description: Exact commands and minimal steps.
+      placeholder: |
+        1. lanbusd ...
+        2. lanbus-worker ...
+        3. lan_dispatch ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: lanbus version
+      placeholder: "1.9.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / environment
+      placeholder: "Windows 11, WSL Ubuntu 24.04, macOS 15 arm64"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs (redacted)
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I removed tokens and private data.
+          required: true
+        - label: I checked docs/troubleshooting.md.
+          required: true

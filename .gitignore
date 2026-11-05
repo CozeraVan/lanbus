@@ -1,0 +1,39 @@
+# runtime data（hub 默认写到 ~/.lanbus，这里兜住本机调试产物）
+bus.db
+bus.db-wal
+bus.db-shm
+artifacts/
+token.txt
+bin/
+go/*.exe
+worker-token.txt
+operator-token.txt
+outbox/
+logs/
+.lanbus/
+
+# 含 token 的真实配置，只提交 .example
+.mcp.json
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# editor / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+*.pfx
+*.pem
+.env

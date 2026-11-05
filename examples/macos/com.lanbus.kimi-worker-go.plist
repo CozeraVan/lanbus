@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS Kimi worker using the native Go binary.
+  Copy to ~/Library/LaunchAgents/com.lanbus.kimi-worker-go.plist, edit paths/token, then:
+    launchctl unload ~/Library/LaunchAgents/com.lanbus.kimi-worker-go.plist 2>/dev/null
+    launchctl load -w ~/Library/LaunchAgents/com.lanbus.kimi-worker-go.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lanbus.kimi-worker-go</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/me/bin/lanbus-worker-darwin-arm64</string>
+    <string>--name</string> <string>mac-kimi</string>
+    <string>--env</string> <string>macos</string>
+    <string>--hub</string> <string>http://HUB_LAN_IP:8788</string>
+    <string>--token</string> <string>REPLACE_WITH_WORKER_TOKEN</string>
+    <string>--cwd</string> <string>/Users/me/proj</string>
+    <string>--agent</string> <string>kimi</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/me/.kimi-code/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key> <true/>
+  <key>KeepAlive</key> <true/>
+  <key>StandardOutPath</key> <string>/tmp/lanbus-kimi-worker-go.out</string>
+  <key>StandardErrorPath</key> <string>/tmp/lanbus-kimi-worker-go.err</string>
+</dict>
+</plist>

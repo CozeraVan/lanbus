@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lanbus"
+version = "1.9.0"
+description = "LAN-wide agent orchestration + zero-preinstall AI-agent discovery: dispatch to Windows/WSL/macOS, verify, rework."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "lanbus contributors" }]
+keywords = ["mcp", "agent", "orchestration", "claude-code", "lan", "wsl", "multi-agent", "discovery", "ollama", "lm-studio"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Build Tools",
+  "Topic :: System :: Distributed Computing",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+browser = ["playwright>=1.40"]
+
+[project.scripts]
+lanbus = "lanbus.cli:main"
+lanbus-hub = "lanbus.hub:main"
+lanbus-worker = "lanbus.worker:main"
+
+[project.urls]
+Homepage = "https://github.com/CozeraVan/lanbus"
+Issues = "https://github.com/CozeraVan/lanbus/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

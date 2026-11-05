@@ -1,0 +1,32 @@
+# systemd 模板单元，实例名 = worker 名
+#   sudo cp lanbus-worker@.service /etc/systemd/system/
+#   sudo mkdir -p /etc/lanbus && sudo cp worker.env.example /etc/lanbus/worker.env
+#   sudo systemctl enable --now lanbus-worker@wsl-core
+#
+# 查看: systemctl status lanbus-worker@wsl-core
+# 日志: journalctl -u lanbus-worker@wsl-core -f
+
+[Unit]
+Description=lanbus worker (%i)
+Documentation=https://github.com/CozeraVan/lanbus
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/lanbus/worker.env
+ExecStart=/usr/local/bin/lanbus worker \
+    --name %i \
+    --env ${LANBUS_ENV} \
+    --hub ${LANBUS_HUB} \
+    --token ${LANBUS_TOKEN} \
+    --cwd ${LANBUS_CWD} \
+    --agent ${LANBUS_AGENT}
+Restart=always
+RestartSec=5
+# worker 只连出，不需要任何特权
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

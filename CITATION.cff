@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+title: lanbus
+message: "If you use lanbus in research or a product, please cite this repository."
+type: software
+authors:
+  - name: lanbus contributors
+repository-code: "https://github.com/CozeraVan/lanbus"
+license: MIT
+version: 1.9.0
+abstract: "LAN-wide orchestration bus for AI agents: pull workers, verifiable tasks, human-approved remote dispatch."

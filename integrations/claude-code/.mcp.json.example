@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lanbus": {
+      "type": "http",
+      "url": "http://HUB_LAN_IP:8788/mcp",
+      "headers": {
+        "Authorization": "Bearer REPLACE_WITH_TOKEN"
+      }
+    }
+  }
+}
