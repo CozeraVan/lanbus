@@ -25,12 +25,26 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/CozeraVan/lanbus/go/internal/hub"
+	"github.com/CozeraVan/lanbus/go/internal/peerui"
 )
 
 //go:embed icon.ico
 var icon []byte
 
 var _ embed.FS
+
+// peerEntry is a discoverable local direct-peer approval page.
+type peerEntry struct{ name, url string }
+
+// peerUIEntries adapts the shared loopback-only peer discovery for the tray.
+func peerUIEntries(home string) []peerEntry {
+	items := peerui.Entries(home)
+	peers := make([]peerEntry, 0, len(items))
+	for _, item := range items {
+		peers = append(peers, peerEntry{name: item.Name, url: item.URL})
+	}
+	return peers
+}
 
 type proxyHandler struct {
 	proxy *httputil.ReverseProxy
@@ -109,6 +123,20 @@ func main() {
 		systray.SetTooltip("lanbus local agent bus")
 		open := systray.AddMenuItem("打开面板", "显示 lanbus 窗口")
 		browser := systray.AddMenuItem("浏览器打开", "在默认浏览器打开 /ui")
+		// Direct-peer approval pages (loopback-only; secret via URL fragment).
+		home, _ := os.UserHomeDir()
+		peers := peerUIEntries(home)
+		if len(peers) > 0 {
+			systray.AddSeparator()
+			for _, p := range peers {
+				item := systray.AddMenuItem("审批: "+p.name, "打开直连审批页面")
+				go func(url string, ch <-chan struct{}) {
+					for range ch {
+						_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+					}
+				}(p.url, item.ClickedCh)
+			}
+		}
 		systray.AddSeparator()
 		quit := systray.AddMenuItem("退出", "关闭 lanbus")
 		go func() {

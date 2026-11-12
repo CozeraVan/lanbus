@@ -44,6 +44,9 @@ type Config struct {
 	LeaseS           int
 	MaxArtifactBytes int64
 	DownloadDir      string
+	TLSCert          string // optional PEM cert file; enables HTTPS when set with TLSKey
+	TLSKey           string // optional PEM key file
+	PprofAddr        string // optional loopback addr (e.g. 127.0.0.1:6060) for net/http/pprof
 }
 
 type Event struct {
@@ -124,14 +127,29 @@ func (h *Hub) Handler() http.Handler { return http.HandlerFunc(h.route) }
 
 func (h *Hub) Run() error {
 	go h.reaper()
+	if h.cfg.PprofAddr != "" {
+		go h.servePprof()
+	}
 	addr := net.JoinHostPort(h.cfg.Bind, strconv.Itoa(h.cfg.Port))
 	srv := &http.Server{Addr: addr, Handler: h.Handler(), ReadHeaderTimeout: 10 * time.Second}
-	fmt.Printf("[lanbusd] listening %s version=%s data=%s\n", addr, h.cfg.Version, h.cfg.DataDir)
+	scheme := "http"
+	if h.cfg.TLSCert != "" && h.cfg.TLSKey != "" {
+		scheme = "https"
+	}
+	fmt.Printf("[lanbusd] listening %s://%s version=%s data=%s\n", scheme, addr, h.cfg.Version, h.cfg.DataDir)
+	if scheme == "https" {
+		return srv.ListenAndServeTLS(h.cfg.TLSCert, h.cfg.TLSKey)
+	}
 	return srv.ListenAndServe()
 }
 
 func (h *Hub) route(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
+	public := path == "/health" || path == "/" || path == "/ui" || path == "/ui/"
+	if !public && !validHost(r.Host) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "bad host", "host": r.Host})
+		return
+	}
 	switch {
 	case path == "/health":
 		h.health(w, r)
@@ -200,6 +218,23 @@ func (h *Hub) auth(r *http.Request, worker bool) bool {
 
 func (h *Hub) authOperator(r *http.Request) bool {
 	return tokenEqual(requestToken(r), h.cfg.OperatorToken)
+}
+
+func validHost(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	host := raw
+	if strings.HasPrefix(raw, "[") {
+		if end := strings.Index(raw, "]"); end > 0 {
+			host = raw[1:end]
+		}
+	} else if h, _, err := net.SplitHostPort(raw); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	return host == "localhost" || net.ParseIP(host) != nil
 }
 
 func requestToken(r *http.Request) string {
@@ -346,24 +381,48 @@ func (h *Hub) awaitIDs(ids []string, waitSec float64) map[string]any {
 	}
 }
 
-func (h *Hub) recoverTask(r map[string]any, reason string) string {
-	tid := asString(r["id"])
-	rec := asInt(r["recoveries"]) + 1
-	maxRec := asInt(r["max_recoveries"])
-	if maxRec == 0 {
-		maxRec = 3
+func (h *Hub) recoverTask(snapshot map[string]any, reason string) string {
+	tid := asString(snapshot["id"])
+	fresh, err := h.store.one("SELECT * FROM tasks WHERE id=?", tid)
+	if err != nil || fresh == nil || !active[asString(fresh["status"])] ||
+		asString(fresh["worker"]) != asString(snapshot["worker"]) ||
+		asString(fresh["claim_token"]) != asString(snapshot["claim_token"]) {
+		return ""
 	}
+	rec := asInt(fresh["recoveries"]) + 1
+	maxRec := asInt(fresh["max_recoveries"])
+	worker := asString(fresh["worker"])
+	claim := asString(fresh["claim_token"])
 	if rec > maxRec {
-		_, _ = h.store.exec(`UPDATE tasks SET status='failed', review_note=?, updated_at=?, finished_at=? WHERE id=?`,
-			"[auto recover exhausted] "+reason, nowText(), nowText(), tid)
-		h.emit("task.failed", map[string]any{"id": tid, "reason": reason})
-		return "failed"
+		res, err := h.store.exec(`UPDATE tasks SET status='failed', recoveries=?, worker=NULL,
+			claim_token=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
+			review_note=?, updated_at=?, finished_at=?
+			WHERE id=? AND status IN ('claimed','running') AND worker=? AND COALESCE(claim_token,'')=?`,
+			rec, "[auto recover exhausted] "+reason, nowText(), nowText(), tid, worker, claim)
+		if err != nil {
+			return ""
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return ""
+		}
+		h.emit("task.failed", map[string]any{"id": tid, "recoveries": rec, "reason": reason})
+		return StatusFailed
 	}
-	_, _ = h.store.exec(`UPDATE tasks SET status='queued', recoveries=?, worker=NULL,
+	res, err := h.store.exec(`UPDATE tasks SET status='queued', recoveries=?, worker=NULL,
 		last_claim_token=claim_token, claim_token=NULL, lease_expires_at=NULL,
 		heartbeat_at=NULL, cancel_requested=0, cancel_reason=NULL,
-		composed_prompt=NULL, review_note=?, updated_at=? WHERE id=?`,
-		rec, "[auto recover "+strconv.Itoa(rec)+"/"+strconv.Itoa(maxRec)+"] "+reason, nowText(), tid)
-	h.emit("task.recovered", map[string]any{"id": tid, "recoveries": rec, "reason": reason, "status": "queued"})
-	return "queued"
+		composed_prompt=NULL, review_note=?, updated_at=?
+		WHERE id=? AND status IN ('claimed','running') AND worker=? AND COALESCE(claim_token,'')=?`,
+		rec, "[auto recover "+strconv.Itoa(rec)+"/"+strconv.Itoa(maxRec)+"] "+reason,
+		nowText(), tid, worker, claim)
+	if err != nil {
+		return ""
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ""
+	}
+	h.emit("task.recovered", map[string]any{"id": tid, "recoveries": rec, "reason": reason, "status": StatusQueued})
+	return StatusQueued
 }

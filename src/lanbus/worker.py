@@ -36,6 +36,7 @@ import json
 import mimetypes
 import os
 import queue
+import re
 import shlex
 import shutil
 import signal
@@ -75,6 +76,18 @@ DEFAULTS = {
     "shell": "",
     "echo": "",
 }
+
+
+def apply_permission_mode(command, mode):
+    """覆盖 agent 命令中已有的 --permission-mode（如 claude 的 acceptEdits）。
+
+    仅当命令本身带该旗标时生效；mode 为空或命令无旗标时原样返回，
+    不改变其它适配器（codex/kimi/deepseek）的行为。
+    """
+    if mode and command and "--permission-mode" in command:
+        return re.sub(r"--permission-mode(?:\s+|=)\S+",
+                      "--permission-mode " + mode, command)
+    return command
 
 DEFAULT_ARTIFACT_GLOBS = [
     ".lanbus-shot.*",
@@ -566,7 +579,8 @@ class Worker:
         self.token = a.token
         self.cwd = a.cwd
         self.agent = a.agent
-        self.cmd = a.cmd or DEFAULTS.get(a.agent, "")
+        self.cmd = apply_permission_mode(a.cmd or DEFAULTS.get(a.agent, ""),
+                                         getattr(a, "agent_permission_mode", ""))
         self.ssl_ctx = _ssl_context(a)
         self.stopping = threading.Event()
         self.previous_task = None
@@ -953,13 +967,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", required=True)
     ap.add_argument("--env", required=True, help="windows | wsl | macos | 自定义")
-    ap.add_argument("--hub", required=True, help="http://<hub主机IP>:8788")
+    ap.add_argument("--hub", default=os.environ.get("LANBUS_HUB", ""),
+                    help="http://<hub主机IP>:8788；--direct 模式不需要")
+    ap.add_argument("--direct", action="store_true", help="启用零配置直连，不连接 Hub")
+    ap.add_argument("--direct-port", type=int, default=8790)
+    ap.add_argument("--direct-bind", default="0.0.0.0")
+    ap.add_argument("--direct-data-dir", default="")
     ap.add_argument("--token",
                     default=os.environ.get("LANBUS_WORKER_TOKEN")
                     or os.environ.get("LANBUS_TOKEN", "devtoken"))
     ap.add_argument("--cwd", default="")
     ap.add_argument("--agent", default="claude", choices=list(DEFAULTS))
     ap.add_argument("--cmd", default="")
+    ap.add_argument("--agent-permission-mode",
+                    default=os.environ.get("LANBUS_AGENT_PERMISSION_MODE", ""),
+                    help="覆盖 agent 命令中的 --permission-mode（如 claude 的 "
+                         "bypassPermissions，用于可信 LAN 远端跑测试）；"
+                         "默认 acceptEdits 不变；env LANBUS_AGENT_PERMISSION_MODE")
     ap.add_argument("--caps", default="")
     ap.add_argument("--artifact-glob", action="append",
                     help="额外产物 glob，可重复；逗号分隔")
@@ -978,6 +1002,27 @@ def main():
     ap.add_argument("--insecure", action="store_true",
                     help="https 时跳过证书校验（仅限可信 LAN/Tailscale）")
     a = ap.parse_args()
+    if a.direct:
+        from .peer import PeerServer
+        data_dir = a.direct_data_dir or os.path.join(
+            os.path.expanduser("~"), ".lanbus", "peers", a.name)
+        server = PeerServer(name=a.name, agent=a.agent, cwd=a.cwd or os.getcwd(),
+                            command=apply_permission_mode(
+                                a.cmd or DEFAULTS.get(a.agent, ""),
+                                a.agent_permission_mode),
+                            data_dir=data_dir,
+                            host=a.direct_bind, port=a.direct_port)
+        server.start()
+        print(f"[worker:{a.name}] direct={server.url} peer_id={server.identity.peer_id}",
+              flush=True)
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            server.stop()
+        return
+    if not a.hub:
+        ap.error("非直连模式必须提供 --hub；零配置模式请使用 --direct")
     w = Worker(a)
     if w.browser_info.get("ok"):
         print(f"[worker:{w.name}] browser caps: {w.browser_info.get('caps')}", flush=True)

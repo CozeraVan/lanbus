@@ -30,6 +30,12 @@ type Config struct {
 	PTY           bool
 	Insecure      bool
 	Version       bool
+
+	Direct              bool
+	DirectPort          int
+	DirectBind          string
+	DirectDataDir       string
+	AgentPermissionMode string
 }
 
 type Task struct {

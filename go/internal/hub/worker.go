@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func (h *Hub) worker(w http.ResponseWriter, r *http.Request) {
@@ -191,7 +192,8 @@ func (h *Hub) taskForWorker(tid, name, claim string) (map[string]any, map[string
 
 func (h *Hub) progress(name string, a map[string]any) map[string]any {
 	tid := asString(a["task_id"])
-	r, er := h.taskForWorker(tid, name, asString(a["claim_token"]))
+	claim := asString(a["claim_token"])
+	r, er := h.taskForWorker(tid, name, claim)
 	if er != nil {
 		return er
 	}
@@ -203,10 +205,19 @@ func (h *Hub) progress(name string, a map[string]any) map[string]any {
 	if lease <= 0 {
 		lease = h.cfg.LeaseS
 	}
-	_, _ = h.store.exec("UPDATE tasks SET heartbeat_at=?, lease_expires_at=?, updated_at=? WHERE id=?",
-		nowText(), laterText(lease), nowText(), tid)
+	res, err := h.store.exec(`UPDATE tasks SET heartbeat_at=?, lease_expires_at=?, updated_at=?
+		WHERE id=? AND worker=? AND COALESCE(claim_token,'')=? AND status IN ('claimed','running')`,
+		nowText(), laterText(lease), nowText(), tid, name, claim)
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		current, _ := h.store.one("SELECT status FROM tasks WHERE id=?", tid)
+		return map[string]any{"ok": false, "invalid": true, "status": asString(current["status"])}
+	}
 	_, _ = h.store.exec("UPDATE workers SET last_seen=? WHERE name=?", nowText(), name)
-	cancel := asBool(r["cancel_requested"]) || asString(r["status"]) == StatusCancelled
+	cancel := asBool(r["cancel_requested"])
 	out := map[string]any{"ok": true, "now": nowText(), "status": r["status"], "lease_expires_at": laterText(lease)}
 	if cancel {
 		out["cancel"] = []string{tid}
@@ -218,11 +229,26 @@ func (h *Hub) progress(name string, a map[string]any) map[string]any {
 
 func (h *Hub) logLines(name string, a map[string]any) map[string]any {
 	tid := asString(a["task_id"])
-	r, er := h.taskForWorker(tid, name, asString(a["claim_token"]))
-	if er != nil {
-		return er
+	claim := asString(a["claim_token"])
+	tx, err := h.store.db.Begin()
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
 	}
-	if !active[asString(r["status"])] {
+	defer tx.Rollback()
+	rows, err := tx.Query("SELECT * FROM tasks WHERE id=?", tid)
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	taskRows, scanErr := scanRows(rows)
+	rows.Close()
+	if scanErr != nil {
+		return map[string]any{"ok": false, "error": scanErr.Error()}
+	}
+	if len(taskRows) == 0 {
+		return map[string]any{"ok": false, "error": "task not found"}
+	}
+	r := taskRows[0]
+	if !active[asString(r["status"])] || asString(r["worker"]) != name || asString(r["claim_token"]) != claim {
 		return map[string]any{"ok": false, "stale": true, "status": r["status"]}
 	}
 	raw, _ := a["lines"].([]any)
@@ -240,23 +266,18 @@ func (h *Hub) logLines(name string, a map[string]any) map[string]any {
 		if seq <= 0 {
 			seq = last + 1
 		}
-		text := asString(m["text"])
-		if len(text) > 20000 {
-			text = text[:20000]
-		}
-		stream := asString(m["stream"])
+		text := trunc(asString(m["text"]), 20000)
+		stream := trunc(asString(m["stream"]), 32)
 		if stream == "" {
 			stream = "stdout"
 		}
-		if len(stream) > 32 {
-			stream = stream[:32]
-		}
-		res, err := h.store.exec("INSERT OR IGNORE INTO task_logs(task_id,seq,stream,text,created_at) VALUES(?,?,?,?,?)",
+		res, err := tx.Exec("INSERT OR IGNORE INTO task_logs(task_id,seq,stream,text,created_at) VALUES(?,?,?,?,?)",
 			tid, seq, stream, text, nowText())
-		if err == nil {
-			if nf, _ := res.RowsAffected(); nf > 0 {
-				n++
-			}
+		if err != nil {
+			return map[string]any{"ok": false, "error": err.Error()}
+		}
+		if nf, _ := res.RowsAffected(); nf > 0 {
+			n++
 		}
 		if seq > last {
 			last = seq
@@ -266,9 +287,20 @@ func (h *Hub) logLines(name string, a map[string]any) map[string]any {
 	if lease <= 0 {
 		lease = h.cfg.LeaseS
 	}
-	_, _ = h.store.exec(`UPDATE tasks SET log_seq=?, log_lines=COALESCE(log_lines,0)+?, last_log_at=?,
-		heartbeat_at=?, lease_expires_at=?, updated_at=? WHERE id=?`,
-		last, n, nowText(), nowText(), laterText(lease), nowText(), tid)
+	res, err := tx.Exec(`UPDATE tasks SET log_seq=?, log_lines=COALESCE(log_lines,0)+?, last_log_at=?,
+		heartbeat_at=?, lease_expires_at=?, updated_at=?
+		WHERE id=? AND worker=? AND COALESCE(claim_token,'')=? AND status IN ('claimed','running')`,
+		last, n, nowText(), nowText(), laterText(lease), nowText(), tid, name, claim)
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	updated, _ := res.RowsAffected()
+	if updated == 0 {
+		return map[string]any{"ok": false, "stale": true, "status": r["status"]}
+	}
+	if err := tx.Commit(); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
 	if n > 0 {
 		lastItem := raw[len(raw)-1]
 		text, stream := "", "stdout"
@@ -278,10 +310,7 @@ func (h *Hub) logLines(name string, a map[string]any) map[string]any {
 				stream = s
 			}
 		}
-		if len(text) > 1000 {
-			text = text[:1000]
-		}
-		h.emit("task.log", map[string]any{"id": tid, "seq": last, "stream": stream, "text": text})
+		h.emit("task.log", map[string]any{"id": tid, "seq": last, "stream": stream, "text": trunc(text, 1000)})
 	}
 	return map[string]any{"ok": true, "next_seq": last}
 }
@@ -389,10 +418,16 @@ func boolInt(v bool) int {
 }
 
 func trunc(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	if n < 0 {
+		n = 0
 	}
-	return s
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.ValidString(s[:n]) {
+		n--
+	}
+	return s[:n]
 }
 
 func (h *Hub) recoverWorker(name string, a map[string]any) map[string]any {
@@ -408,9 +443,9 @@ func (h *Hub) recoverWorker(name string, a map[string]any) map[string]any {
 		age := time.Since(parseText(asString(r["heartbeat_at"]))).Seconds()
 		if force || age > maxAge || parseText(asString(r["lease_expires_at"])).Before(time.Now()) {
 			res := h.recoverTask(r, "worker "+name+" restarted / lost")
-			if res == "failed" {
+			if res == StatusFailed {
 				failed = append(failed, asString(r["id"]))
-			} else {
+			} else if res == StatusQueued {
 				done = append(done, asString(r["id"]))
 			}
 		}

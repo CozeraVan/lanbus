@@ -102,6 +102,37 @@ MCP `lan_dispatch` / `lan_dispatch_many` / `lan_envs` / `lan_list` / `lan_result
 `lanbusd`，对比 status、exit code、verify 和任务结果。Go hub 现在是 8788 上的默认 hub；
 Python hub（`lanbus hub` / `start-hub-python.cmd`）保留为 browser/legacy 回退。
 
+### 零配置跨机 Agent 直连（Python Worker）
+
+被指挥机器启动直连 Worker，不需要 Hub 或 token：
+
+```bash
+lanbus worker --name mac-agent --env macos --direct --cwd ~/project --agent claude
+```
+
+发起机器直接对话或提交项目任务：
+
+```bash
+lanbus chat --to mac-agent --message "请介绍你的环境，并给出协作方案"
+lanbus run --to 192.168.1.236:8790 --cwd /Users/me/project --message "检查项目并运行测试"
+```
+
+首次请求会在目标终端显示待确认 ID，发起端自动等待。目标用户在本机执行：
+
+```bash
+lanbus inbox --name mac-agent
+lanbus allow REQUEST_ID --name mac-agent --pair --scope chat
+# 或仅本次会话：lanbus allow REQUEST_ID --name mac-agent --session --scope project --cwd ~/project
+```
+
+批准后请求自动继续；持续配对后续无需确认，会话授权空闲 30 分钟或目标重启后失效。`lanbus revoke PEER_ID --name mac-agent` 可在目标本机撤销。默认扫描包含直连端口 `8790`、`8791`，也可显式使用 IP:port。
+
+直连采用 Ed25519 身份、X25519 密钥协商和 AES-GCM 加密。私密文件在 POSIX 下使用 `0700` 目录、`0600` 文件和原子写入；审批、拒绝、撤销只接受目标本机回环请求。项目任务限制在批准的 cwd 内，但底层 agent CLI 不等于完整 OS 沙箱，授权前仍应检查来源和请求内容。
+
+### Hub 模式（兼容已有部署）
+
+已有 Hub 部署仍可使用 `lanbus connect HOST` 保存按 Hub 隔离的 agent token，然后运行不带 `--to` 的 `lanbus chat --message`，自动选择 2–4 个在线 Worker。显式 `--hub`、`--token`、`--envs` 优先；远程人工确认继续使用 `lanbus web`。这套兼容流程与新的 Agent 直连互不影响。
+
 ### 本机多 agent 对话
 
 每个本机 agent 启一个 worker（Linux 侧 A agent CLI、Windows 侧 B agent CLI、C agent 桌面端、WSL agent 各自一个 env），然后由 hub 按顺序接力：
@@ -196,6 +227,39 @@ lanbus ask --endpoint 192.168.1.60:1234 --prompt "review this diff" --model qwen
 ```
 
 重要边界：**纯 GUI、不监听端口的 agent**（C agent 桌面端）只能在它运行的那台机器上通过进程扫描看到；要从其它机器看到它，需要那台机器跑一个 lanbus worker，或在本机执行 `lanbus discover`。远程侦查天然只能看到网络暴露出来的东西。
+
+## 从发行版安装（成品产品）
+
+[GitHub Releases](https://github.com/CozeraVan/lanbus/releases) 提供三平台预编译安装器，**无需 Python**：
+
+| 平台 | 产物 | 安装 |
+|---|---|---|
+| Windows | `lanbus-<ver>-setup.exe` / 便携 `.zip` | 运行安装器，或解压后 `start-hub.cmd` |
+| macOS | `lanbus-<ver>-macos-arm64.pkg` | `sudo installer -pkg … -target /` |
+| Linux | `lanbus_<ver>_amd64.deb` | `sudo dpkg -i …` |
+
+每个包内含原生二进制 `lanbus`（CLI）、`lanbusd`（hub）、`lanbus-worker`、`lanbus-scan`，以及 Windows GUI；发行附 `SHA256SUMS.txt`。详见 [docs/install.md](docs/install.md)。
+
+### 产品 CLI 与服务化
+
+原生 `lanbus` CLI 免 Python 运维：
+
+```bash
+lanbus version                             # 注入的发行版本号
+lanbus healthcheck --url http://HUB:8788   # 仅健康 hub 返回 exit 0
+lanbus peer-ui --name my-agent             # 打开本机直连 agent 审批页
+lanbus backup                              # 归档 SQLite(WAL)+令牌 到 ~/.lanbus/backups/
+lanbus restore ~/.lanbus/backups/lanbus-<ts>.zip
+lanbus daemon install                      # hub 自启：Windows 任务 / macOS launchd / Linux systemd
+lanbus daemon status
+lanbus daemon uninstall
+```
+
+`lanbusd` 首次运行自动生成**强随机 agent 令牌**（持久化到 `~/.lanbus/token.txt`）；仅开发用 `--allow-dev-token`。可选 TLS（`--tls-cert` / `--tls-key`）与仅环回的 pprof 监听（`--pprof 127.0.0.1:6060`）。见 [docs/security.md](docs/security.md)。
+
+发行由 `.github/workflows/release.yml` 在 `v*` 标签触发（跨平台二进制 + Windows 便携 ZIP／Setup EXE + macOS PKG + Linux DEB + wheel + 校验和）。见 [docs/release.md](docs/release.md)。
+
+---
 
 ## 快速开始（3 分钟）
 
@@ -437,8 +501,8 @@ lanbus worker --name mac-a-cli --env macos --hub http://HUB_LAN_IP:8788 --token 
 
 ```bash
 pip install -e ".[dev]"
-pytest -v                     # 39 项：协议、派单/打回、实时日志、取消/中断、租约恢复、产物、角色 token、侦查、对话、Web UI、本地 worker 管理、Go hub 工具/双跑、远程确认
-make go-test                  # Go 扫描器 + worker 测试
+pytest -v                     # 91 项：协议、派单/打回、实时日志、取消/中断、租约恢复、产物、角色 token、侦查、对话、Web UI、本地 worker 管理、Go hub 工具/双跑、远程确认、直连 peering、发布产物
+make go-test                  # Go 扫描器 + worker + hub + backup + daemon 测试
 make go-scan                  # 构建 bin/lanbus-scan，Python 自动检测
 make go-worker                # 构建 bin/lanbus-worker
 python -m pip wheel . --no-deps --no-build-isolation -w dist
@@ -448,9 +512,13 @@ python -m pip wheel . --no-deps --no-build-isolation -w dist
 
 ## 文档
 
+- [安装](docs/install.md) —— 预编译安装器、服务化、健康检查/备份
+- [发行](docs/release.md) —— 标签流水线、安装器、签名/公证
+- [安全](docs/security.md) —— 令牌、TLS、审批、pprof、备份
 - [架构](docs/architecture.md) —— 组件、为什么用拉取、状态机、证据模型
 - [协议](docs/protocol.md) —— 全部端点、工具 schema、错误码、SSE 事件
 - [排错](docs/troubleshooting.md) —— 现象 → 原因 → 处理
+- [工作日志](docs/WORKLOG.md) —— 完成度与已验证边界
 - [Go 迁移评估](docs/go-migration.md) —— 是否/为何迁移到 Go，参考 magpie 的架构
 - [Go 扫描器与 worker](go/README.md) —— Phase 0/1 原生二进制
 - [English README](README.md) · [发布指南](PUBLISHING.md) · [变更记录](CHANGELOG.md) · [贡献指南](CONTRIBUTING.md)

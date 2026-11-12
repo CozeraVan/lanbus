@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  lanbus 直连 worker（Go 原生）macOS 登录自启模板。
+  1. 交叉编译: GOOS=darwin GOARCH=arm64 go build -o lanbus-worker-darwin-arm64 ./cmd/lanbus-worker
+  2. 复制到 ~/bin/lanbus-worker-darwin-arm64 并 chmod +x
+  3. 编辑下方路径/名字/端口/工作目录
+  4. cp com.lanbus.peer.plist ~/Library/LaunchAgents/
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.lanbus.peer.plist
+  卸载: launchctl bootout gui/$(id -u)/com.lanbus.peer
+  审批: lanbus peer-ui --name mac-agent
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lanbus.peer</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/me/bin/lanbus-worker-darwin-arm64</string>
+    <string>--name</string> <string>mac-agent</string>
+    <string>--env</string> <string>macos</string>
+    <string>--direct</string>
+    <string>--direct-port</string> <string>8790</string>
+    <string>--cwd</string> <string>/Users/me/proj</string>
+    <string>--agent</string> <string>claude</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/me/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key> <true/>
+  <key>KeepAlive</key> <true/>
+  <key>StandardOutPath</key> <string>/tmp/lanbus-peer.out</string>
+  <key>StandardErrorPath</key> <string>/tmp/lanbus-peer.err</string>
+</dict>
+</plist>

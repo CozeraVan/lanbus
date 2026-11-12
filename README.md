@@ -104,6 +104,37 @@ and task result. The Go hub is now the **default** on port 8788; the Python hub
 remains available as a fallback (`lanbus hub` / `start-hub-python.cmd`) for
 browser-task and legacy compatibility.
 
+### Zero-config direct agent peering (Python Worker)
+
+Start a direct worker on the target machine. No hub or token is needed:
+
+```bash
+lanbus worker --name mac-agent --env macos --direct --cwd ~/project --agent claude
+```
+
+Chat or submit a project task from another machine:
+
+```bash
+lanbus chat --to mac-agent --message "Introduce your environment and propose a collaboration plan"
+lanbus run --to 192.168.1.236:8790 --cwd /Users/me/project --message "Inspect the project and run tests"
+```
+
+The first request waits while the target terminal shows its request ID. On the target machine, the local user runs:
+
+```bash
+lanbus inbox --name mac-agent
+lanbus allow REQUEST_ID --name mac-agent --pair --scope chat
+# Or this session only: lanbus allow REQUEST_ID --name mac-agent --session --scope project --cwd ~/project
+```
+
+The waiting request continues automatically after approval. Persistent pairs need no repeated approval; session grants expire after 30 idle minutes or a target restart. Revoke locally with `lanbus revoke PEER_ID --name mac-agent`. Discovery includes direct ports `8790` and `8791`; an explicit IP:port also works.
+
+Direct peering uses Ed25519 identities, X25519 key agreement, and AES-GCM encryption. On POSIX, private files use `0700` directories, `0600` files, and atomic writes. Approval, denial, and revocation accept only loopback requests on the target. Project tasks are confined to approved working directories, but the underlying agent CLI is not a complete OS sandbox; inspect the source and request before approving.
+
+### Hub mode (existing deployments)
+
+Existing hub deployments can still use `lanbus connect HOST` to save a per-hub agent token, followed by `lanbus chat --message` without `--to` to select 2–4 online workers automatically. Explicit `--hub`, `--token`, and `--envs` take precedence, and remote confirmation still uses `lanbus web`. This compatibility flow is independent of direct peering.
+
 ### Local multi-agent chat
 
 Start one worker per local agent - a Linux-side A agent CLI, a Windows-side B agent CLI, a C agent desktop, a WSL agent - each with its own env name, then let the hub relay a conversation:
@@ -201,6 +232,39 @@ lanbus ask --endpoint 192.168.1.60:1234 --prompt "review this diff" --model qwen
 ```
 
 Important limit: a **GUI-only** agent that opens no port (a C agent desktop) can only be seen as a process on the machine where it runs. To see it from another machine, run a lanbus worker there or run `lanbus discover` on that host. Remote discovery is inherently limited to what the network exposes.
+
+## Install from a release (finished product)
+
+Prebuilt installers are published on [GitHub Releases](https://github.com/CozeraVan/lanbus/releases) for all three platforms — **no Python required**:
+
+| Platform | Artifact | Install |
+|---|---|---|
+| Windows | `lanbus-<ver>-setup.exe` / portable `.zip` | run the installer, or unzip + `start-hub.cmd` |
+| macOS | `lanbus-<ver>-macos-arm64.pkg` | `sudo installer -pkg … -target /` |
+| Linux | `lanbus_<ver>_amd64.deb` | `sudo dpkg -i …` |
+
+Each ships the native binaries `lanbus` (CLI), `lanbusd` (hub), `lanbus-worker`, `lanbus-scan`, plus the Windows GUI. Releases carry `SHA256SUMS.txt`. Details: [docs/install.md](docs/install.md).
+
+### Product CLI & service
+
+The native `lanbus` CLI operates the product without Python:
+
+```bash
+lanbus version                             # stamped release version
+lanbus healthcheck --url http://HUB:8788   # exit 0 only for a healthy lanbus hub
+lanbus peer-ui --name my-agent             # open local direct-peer approval page
+lanbus backup                              # archive SQLite(WAL)+tokens to ~/.lanbus/backups/
+lanbus restore ~/.lanbus/backups/lanbus-<ts>.zip
+lanbus daemon install                      # hub autostart: Windows task / macOS launchd / Linux systemd
+lanbus daemon status
+lanbus daemon uninstall
+```
+
+`lanbusd` generates a **strong random agent token** on first run (persisted to `~/.lanbus/token.txt`); pass `--allow-dev-token` only for development. Optional TLS (`--tls-cert` / `--tls-key`) and a loopback-only pprof listener (`--pprof 127.0.0.1:6060`). See [docs/security.md](docs/security.md).
+
+Releases are built by `.github/workflows/release.yml` on a `v*` tag (cross-platform binaries + Windows portable ZIP/Setup EXE + macOS PKG + Linux DEB + wheel + checksums). See [docs/release.md](docs/release.md).
+
+---
 
 ## Quick start (3 minutes)
 
@@ -433,8 +497,8 @@ After it connects, `lan_envs` shows `mac-a-cli` with the adapter capability, and
 
 ```bash
 pip install -e ".[dev]"
-pytest -v                     # 39 tests: protocol, dispatch/rework, logs, cancel/interrupt, lease recovery, artifacts, roles, discovery, chat, web UI, local supervisor, Go hub tools/dual-run, remote confirmation
-make go-test                  # Go scanner + worker tests
+pytest -v                     # 91 tests: protocol, dispatch/rework, logs, cancel/interrupt, lease recovery, artifacts, roles, discovery, chat, web UI, local supervisor, Go hub tools/dual-run, remote confirmation, direct peering, release assets
+make go-test                  # Go scanner + worker + hub + backup + daemon tests
 make go-scan                  # native bin/lanbus-scan; Python auto-detects it
 make go-worker                # native bin/lanbus-worker
 python -m pip wheel . --no-deps --no-build-isolation -w dist
@@ -444,9 +508,13 @@ Tests spin up a real hub and real workers on free ports and drive actual MCP JSO
 
 ## Docs
 
+- [Install](docs/install.md) — prebuilt installers, service setup, healthcheck/backup
+- [Release](docs/release.md) — tag-driven pipeline, installers, signing/notarization
+- [Security](docs/security.md) — tokens, TLS, approval, pprof, backup
 - [Architecture](docs/architecture.md) — components, why workers pull, state machine, evidence model
 - [Protocol](docs/protocol.md) — every endpoint, tool schema, error codes, SSE events
 - [Troubleshooting](docs/troubleshooting.md) — symptom → cause → fix
+- [Worklog](docs/WORKLOG.md) — completion status and verified boundaries
 - [Go migration assessment](docs/go-migration.md) — why/if to move the core to Go, magpie patterns
 - [Go scanner and worker](go/README.md) — Phase 0/1 native binaries
 - [中文说明](README.zh-CN.md) · [发布指南](PUBLISHING.md) · [变更记录](CHANGELOG.md) · [贡献指南](CONTRIBUTING.md)

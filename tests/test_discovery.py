@@ -198,3 +198,8 @@ def test_os_guess():
     assert discovery.guess_os([22, 5000, 7000]) == "macos"
     assert discovery.guess_os([135, 445, 3389]) == "windows"
     assert discovery.guess_os([22]) == "unix"
+
+
+def test_default_ports_include_lanbus_hub():
+    assert 8788 in discovery.BASE_PORTS
+    assert 8789 in discovery.BASE_PORTS

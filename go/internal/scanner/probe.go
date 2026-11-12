@@ -227,6 +227,20 @@ func probeHTTP(ip string, port int, tlsMode bool, timeout float64) []map[string]
 			add("lanbus", map[string]any{"endpoint": endpoint, "version": asString(obj["version"]), "mcp": endpoint + "/mcp"})
 		}
 	}
+	// Zero-config direct peers (parity with the Python engine's lanbus-peer probe).
+	st, _, data = get("/peer/health")
+	obj = jsonMap(data)
+	if st == 200 && obj != nil && asBool(obj["direct_pairing"], false) && asString(obj["peer_id"]) != "" {
+		peerName := asString(obj["name"])
+		if peerName == "" {
+			peerName = "lanbus-peer"
+		}
+		add("lanbus-peer", map[string]any{
+			"name": peerName, "endpoint": endpoint, "peer_id": asString(obj["peer_id"]),
+			"hostname": asString(obj["hostname"]), "agent": asString(obj["agent"]),
+			"direct_pairing": true,
+		})
+	}
 	mcpBody, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "initialize",
 		"params": map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}},
@@ -252,6 +266,7 @@ func aiKind(kind string) bool {
 	switch kind {
 	case "ollama", "lmstudio", "openai", "vllm", "localai", "llamacpp", "openwebui",
 		"comfyui", "gradio", "jupyter", "chrome-devtools", "mcp", "lanbus",
+		"lanbus-peer",
 		"anythingllm", "dify", "n8n", "langflow", "textgen", "sillytavern",
 		"koboldcpp", "streamlit", "ai-api":
 		return true

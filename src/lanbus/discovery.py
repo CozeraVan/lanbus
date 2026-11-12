@@ -47,6 +47,8 @@ BASE_PORTS = [
     8080, 8081, 8082, 8083, 8084, 8088, 8090, 8095,
     8188,              # ComfyUI
     8501,              # Streamlit
+    8788, 8789,        # lanbus hub
+    8790, 8791,        # lanbus direct peer
     8888,              # Jupyter
     9000, 9090,
     11434,             # Ollama
@@ -57,7 +59,7 @@ BASE_PORTS = [
 AI_KINDS = {
     "ollama", "lmstudio", "openai", "vllm", "localai", "llamacpp",
     "openwebui", "comfyui", "gradio", "jupyter", "chrome-devtools",
-    "mcp", "lanbus", "anythingllm", "dify", "n8n", "langflow",
+    "mcp", "lanbus", "lanbus-peer", "anythingllm", "dify", "n8n", "langflow",
     "textgen", "sillytavern", "koboldcpp", "streamlit", "ai-api",
 }
 
@@ -889,6 +891,16 @@ def probe_http(ip, port, timeout=HTTP_TIMEOUT, api_key="", tls=False):
                 version=str(info.get("version") or ""),
                 paths=len(paths), api="openapi")
 
+    # lanbus direct peer（公开健康和身份元数据，不代表已授权）
+    st, hdr, data = _http(ip, port, "GET", "/peer/health", timeout=timeout,
+                          api_key=api_key, tls=tls)
+    obj = _json_body(data)
+    if st == 200 and isinstance(obj, dict) and obj.get("direct_pairing") and obj.get("peer_id"):
+        add("lanbus-peer", name=str(obj.get("name") or "lanbus-peer"),
+            endpoint=f"{scheme}://{ip}:{port}", peer_id=obj["peer_id"],
+            hostname=obj.get("hostname") or "", agent=obj.get("agent") or "",
+            direct_pairing=True)
+
     # lanbus hub
     st, hdr, data = _http(ip, port, "GET", "/health", timeout=timeout, api_key=api_key, tls=tls)
     auth_seen = auth_seen or st in (401, 403)
@@ -1089,15 +1101,23 @@ def default_scanner_bin():
     found = shutil.which("lanbus-scan")
     if found:
         return found
-    arch = {"AMD64": "amd64", "arm64": "arm64", "x86": "386"}.get(
-        (os.uname().machine if hasattr(os, "uname") else ""), "")
+    machine = os.uname().machine if hasattr(os, "uname") else ""
+    arch = {"AMD64": "amd64", "x86_64": "amd64", "arm64": "arm64",
+            "aarch64": "arm64", "x86": "386", "i686": "386"}.get(machine, "")
     names = []
     if sys.platform.startswith("win"):
         names = ["lanbus-scan.exe", "lanbus-scan-windows-amd64.exe"]
     elif sys.platform == "darwin":
         names = [f"lanbus-scan-darwin-{arch or 'arm64'}", "lanbus-scan"]
     else:
-        names = [f"lanbus-scan-linux-{arch or 'amd64'}", "lanbus-scan"]
+        release = os.uname().release.lower() if hasattr(os, "uname") else ""
+        if "microsoft" in release or "wsl" in release:
+            # WSL 下优先 Windows 二进制（binfmt 互操作）：Linux 二进制只能看到
+            # WSL NAT 子网，Windows 侧才能看到真实局域网。
+            names = ["lanbus-scan.exe", "lanbus-scan-windows-amd64.exe",
+                     f"lanbus-scan-linux-{arch or 'amd64'}", "lanbus-scan"]
+        else:
+            names = [f"lanbus-scan-linux-{arch or 'amd64'}", "lanbus-scan"]
     here = os.path.dirname(os.path.abspath(__file__))
     roots = [os.path.join(here, "..", "..", "bin"),
              os.path.join(DATA_DIR if "DATA_DIR" in globals() else
@@ -1130,6 +1150,58 @@ def _run_go_scanner(scanner, spec, log=None):
     return None
 
 
+PEER_PORTS = (8790, 8791)
+
+
+def _merge_lanbus_peers(rep, http_timeout=HTTP_TIMEOUT, peer_ports=PEER_PORTS):
+    """Go 扫描器（<=0.1.0）缺少 /peer/health 探测；Python 侧对报告中的主机
+    补探直连 peer 端口并合并进 hosts/agents/summary，保持与 Python 引擎同等的
+    lanbus-peer 发现能力（不修改 Go 二进制）。"""
+    if not isinstance(rep, dict):
+        return rep
+    agents = rep.setdefault("agents", [])
+    seen = {(a.get("host"), a.get("port")) for a in agents
+            if isinstance(a, dict) and a.get("kind") == "lanbus-peer"}
+    for host in rep.get("hosts") or []:
+        if not isinstance(host, dict):
+            continue
+        ip = host.get("ip")
+        if not ip:
+            continue
+        for port in peer_ports:
+            if (ip, port) in seen:
+                continue
+            status, _, data = _http(ip, port, "GET", "/peer/health", timeout=http_timeout)
+            obj = _json_body(data)
+            if status != 200 or not isinstance(obj, dict) or not (
+                    obj.get("direct_pairing") and obj.get("peer_id")):
+                continue
+            service = {"kind": "lanbus-peer",
+                       "name": str(obj.get("name") or "lanbus-peer"),
+                       "port": port, "transport": "http", "ai": True,
+                       "endpoint": f"http://{ip}:{port}", "peer_id": obj["peer_id"],
+                       "hostname": obj.get("hostname") or "",
+                       "agent": obj.get("agent") or "", "direct_pairing": True}
+            host.setdefault("services", []).append(service)
+            host.setdefault("agents", []).append(service)
+            if port not in host.setdefault("ports", []):
+                host["ports"].append(port)
+            agents.append({"host": ip, "port": port, "kind": "lanbus-peer",
+                           "name": service["name"], "os_guess": host.get("os_guess") or "",
+                           "models": [], "endpoint": service["endpoint"],
+                           "peer_id": obj["peer_id"], "transport": "http"})
+            seen.add((ip, port))
+    summary = rep.get("summary")
+    if isinstance(summary, dict):
+        remote = [a for a in agents if isinstance(a, dict) and a.get("host") != "local"]
+        summary["agent_endpoints"] = len(remote)
+        summary["hosts_with_agents"] = len({a["host"] for a in remote if a.get("host")})
+        kinds = summary.get("agent_kinds") or []
+        if any(a.get("kind") == "lanbus-peer" for a in remote):
+            summary["agent_kinds"] = sorted(set(kinds) | {"lanbus-peer"})
+    return rep
+
+
 def discover(spec=None, log=None, cancel_event=None):
     """执行一次局域网 AI agent 侦查，返回可 JSON 序列化的 report。"""
     spec = spec or {}
@@ -1137,7 +1209,9 @@ def discover(spec=None, log=None, cancel_event=None):
     if scanner:
         rep = _run_go_scanner(scanner, spec, log)
         if rep is not None:
-            return rep
+            return _merge_lanbus_peers(
+                rep, http_timeout=float(spec.get("http_timeout") or HTTP_TIMEOUT),
+                peer_ports=tuple(spec.get("peer_ports") or PEER_PORTS))
     started = time.time()
 
     def say(msg):

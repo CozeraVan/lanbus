@@ -5,6 +5,7 @@ bus.db-shm
 artifacts/
 token.txt
 bin/
+.tools/
 go/*.exe
 worker-token.txt
 operator-token.txt
@@ -42,3 +43,6 @@ Thumbs.db
 # client-local preset copies
 .claude/
 .mcp/
+
+# local test artifacts (worklog evidence stays local)
+runs/

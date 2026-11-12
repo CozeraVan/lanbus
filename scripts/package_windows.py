@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 VERSION = re.search(r'__version__\s*=\s*"([^"]+)"',
                    (ROOT / "src/lanbus/__init__.py").read_text(encoding="utf-8")).group(1)
 OUT = ROOT / "dist" / f"lanbus-{VERSION}-windows-amd64"
-BINS = ["lanbusd.exe", "lanbus-worker.exe", "lanbus-scan.exe", "lanbus-gui.exe"]
+BINS = ["lanbus.exe", "lanbusd.exe", "lanbus-worker.exe", "lanbus-scan.exe", "lanbus-gui.exe"]
 
 for b in BINS:
     if not (ROOT / "bin" / b).is_file():
@@ -42,8 +42,8 @@ rem Requires Python for `lanbus local`; edit examples\local.json for this machin
 python -m lanbus local up
 """, encoding="utf-8")
 
-(OUT / "lanbus.cmd").write_text("""@echo off
-python -m lanbus %*
+(OUT / "lanbus.cmd").write_text(r"""@echo off
+"%~dp0bin\lanbus.exe" %*
 """, encoding="utf-8")
 
 (OUT / "examples" / "local.json").write_text("""{
@@ -66,6 +66,7 @@ python -m lanbus %*
    edit paths/token, then run `python -m lanbus local up` to keep agents online.
 
 Binaries:
+  bin\lanbus.exe        native product CLI (version/healthcheck/backup/restore/daemon)
   bin\lanbusd.exe       Go hub (default, port 8788)
   bin\lanbus-gui.exe    Wails/WebView2 window + tray
   bin\lanbus-worker.exe Go worker (claude/codex/kimi/deepseek/discover/ask/pty)
