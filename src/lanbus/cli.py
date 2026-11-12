@@ -4,6 +4,7 @@ import getpass
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -418,12 +419,29 @@ def _resolve_peer(value):
     candidates = []
     for agent in discovery.discover({}).get("agents") or []:
         if agent.get("kind") == "lanbus-peer" and agent.get("name") == value:
-            candidates.append(agent.get("endpoint"))
-    candidates = [item for item in dict.fromkeys(candidates) if item]
-    if len(candidates) != 1:
-        raise ValueError("目标名不唯一或未发现，请使用 --to IP:PORT；候选：" +
-                         ", ".join(candidates))
-    return candidates[0]
+            candidates.append((agent.get("endpoint"),
+                               agent.get("peer_id") or agent.get("endpoint")))
+    candidates = [item for item in dict.fromkeys(candidates) if item[0]]
+    if not candidates:
+        raise ValueError("目标名未发现，请使用 --to IP:PORT；候选：")
+    if len({pid for _, pid in candidates}) != 1:
+        raise ValueError("目标名不唯一（多个不同 peer 同名），请使用 --to IP:PORT；候选：" +
+                         ", ".join(e for e, _ in candidates))
+    endpoints = [e for e, _ in candidates]
+    if len(endpoints) > 1:
+        # 同一 peer 在多网卡上被报告：优先主网卡所在子网的 endpoint。
+        prefix = ""
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            probe.connect(("8.8.8.8", 80))
+            prefix = probe.getsockname()[0].rsplit(".", 1)[0] + "."
+            probe.close()
+        except OSError:
+            pass
+        preferred = [e for e in endpoints
+                     if prefix and (urllib.parse.urlsplit(e).hostname or "").startswith(prefix)]
+        endpoints = preferred or endpoints
+    return endpoints[0]
 
 
 def _direct_chat(argv, scope):
@@ -437,32 +455,48 @@ def _direct_chat(argv, scope):
         url = _resolve_peer(_arg(argv, "--to"))
         client = peer.DirectClient(url, _peer_data_dir())
         health = peer.json_request(url + "/peer/health", timeout=10)
-        grant = client.find_grant(health["peer_id"], scope)
-        if not grant:
+
+        def await_pairing():
             pending = peer.request_pairing(url, client.identity, message, scope, cwd)
             request_id = pending["request_id"]
             print(f"目标 {health.get('name')} 待确认 {request_id}；请在目标机器运行 lanbus inbox",
                   flush=True)
             if "--no-wait" in argv:
                 print(json.dumps(pending, ensure_ascii=False, indent=2))
-                return 2
+                return None, 2
             deadline = time.time() + float(_arg(argv, "--pair-timeout", "600") or 600)
             while time.time() < deadline:
                 result = peer.pairing_status(url, request_id, client.identity.peer_id)
                 if result.get("status") == "approved":
                     grant = result["grant"]
                     client.save_grant(grant)
-                    break
+                    return grant, 0
                 if result.get("status") in ("denied", "expired"):
                     print(json.dumps({"ok": False, "error": "目标已拒绝或申请已过期",
                                       "status": result["status"]}, ensure_ascii=False))
-                    return 1
+                    return None, 1
                 time.sleep(0.5)
+            print(json.dumps({"ok": False, "error": "等待目标确认超时"}, ensure_ascii=False))
+            return None, 1
+
+        grant = client.find_grant(health["peer_id"], scope)
+        if not grant:
+            grant, rc = await_pairing()
             if not grant:
-                print(json.dumps({"ok": False, "error": "等待目标确认超时"}, ensure_ascii=False))
-                return 1
-        result = client.request(grant, message, scope, cwd,
-                                timeout=float(_arg(argv, "--timeout", "300") or 300))
+                return rc
+        timeout = float(_arg(argv, "--timeout", "300") or 300)
+        try:
+            result = client.request(grant, message, scope, cwd, timeout=timeout)
+        except RuntimeError as exc:
+            # 授权被撤销/会话失效后自动重新配对，不再要求手动删凭证缓存。
+            if "授权不存在" not in str(exc) and "已过期或已撤销" not in str(exc):
+                raise
+            client.drop_grant(health["peer_id"])
+            print("目标授权已失效，自动重新发起配对…", file=sys.stderr, flush=True)
+            grant, rc = await_pairing()
+            if not grant:
+                return rc
+            result = client.request(grant, message, scope, cwd, timeout=timeout)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     except Exception as exc:
@@ -475,6 +509,20 @@ def _peer_local(argv, action):
     try:
         url = _arg(argv, "--url", "http://127.0.0.1:8790").rstrip("/")
         data_dir = _arg(argv, "--data-dir") or _peer_data_dir(_arg(argv, "--name"))
+        if action == "peer-ui":
+            import webbrowser
+            peer_file = os.path.join(data_dir, "peer.json")
+            if not os.path.exists(peer_file):
+                print(f"未找到运行信息 {peer_file}；请确认直连 worker 正在运行",
+                      file=sys.stderr)
+                return 2
+            with open(peer_file, encoding="utf-8") as handle:
+                info = json.load(handle)
+            with open(os.path.join(data_dir, "approval.json"), encoding="utf-8") as handle:
+                secret = json.load(handle)["secret"]
+            print(f"审批页面：{info['url']}/peer/ui（密钥经 URL 片段自动带入，不会发往服务器）")
+            webbrowser.open(f"{info['url']}/peer/ui#secret={secret}")
+            return 0
         if action == "peers":
             out = peer.json_request(url + "/peer/health", timeout=10)
             print(json.dumps(out, ensure_ascii=False, indent=2))
@@ -513,7 +561,10 @@ def _peer_daemon(argv):
               file=sys.stderr)
         return 2
     agent = _arg(argv, "--agent", "claude")
-    command = _arg(argv, "--cmd") or worker.DEFAULTS.get(agent, "")
+    command = worker.apply_permission_mode(
+        _arg(argv, "--cmd") or worker.DEFAULTS.get(agent, ""),
+        _arg(argv, "--agent-permission-mode") or
+        os.environ.get("LANBUS_AGENT_PERMISSION_MODE", ""))
     server = peer.PeerServer(name=name, agent=agent, cwd=_arg(argv, "--cwd") or os.getcwd(),
                              command=command, data_dir=_arg(argv, "--data-dir") or _peer_data_dir(name),
                              host=_arg(argv, "--bind", "0.0.0.0"),
@@ -707,7 +758,7 @@ def main(argv=None):
         return _direct_chat(rest, "project")
     if cmd == "peer":
         return _peer_daemon(rest)
-    if cmd in ("peers", "inbox", "allow", "deny", "revoke"):
+    if cmd in ("peers", "inbox", "allow", "deny", "revoke", "peer-ui"):
         return _peer_local(rest, cmd)
     if cmd == "interrupt":
         return _interrupt(rest)

@@ -1,0 +1,32 @@
+# lanbus 直连 worker systemd 模板（WSL/Linux），实例名 = peer 名
+#   sudo cp lanbus-peer@.service /etc/systemd/system/
+#   sudo mkdir -p /etc/lanbus && sudo cp peer.env.example /etc/lanbus/peer.env
+#   sudo systemctl enable --now lanbus-peer@wsl-agent
+#
+# 查看: systemctl status lanbus-peer@wsl-agent
+# 日志: journalctl -u lanbus-peer@wsl-agent -f
+# 审批: lanbus peer-ui --name wsl-agent
+
+[Unit]
+Description=lanbus direct peer (%i)
+Documentation=https://github.com/CozeraVan/lanbus
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/lanbus/peer.env
+ExecStart=/usr/local/bin/lanbus worker \
+    --name %i \
+    --env ${LANBUS_ENV} \
+    --direct \
+    --direct-port ${LANBUS_PEER_PORT} \
+    --cwd ${LANBUS_CWD} \
+    --agent ${LANBUS_AGENT}
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

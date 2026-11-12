@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lanbus · 直连审批</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; margin: 0; padding: 24px; background: #f6f7f9; color: #1c1e21; }
+  @media (prefers-color-scheme: dark) { body { background: #16181d; color: #e6e8eb; } .card, .grant { background: #22252b; } input, select { background: #2a2e35; color: #e6e8eb; border-color: #444; } }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #888; font-size: 13px; margin-bottom: 18px; }
+  .card, .grant { background: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .msg { font-size: 15px; margin: 6px 0; word-break: break-all; }
+  .meta { color: #888; font-size: 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  button { border: 0; border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; }
+  .ok { background: #2da44e; color: #fff; }
+  .warn { background: #bf8700; color: #fff; }
+  .no { background: #cf222e; color: #fff; }
+  .ghost { background: transparent; border: 1px solid #888; color: inherit; }
+  input, select { border: 1px solid #ccc; border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+  #secret { width: 320px; }
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1c1e21; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; max-width: 80vw; }
+  .empty { color: #888; font-size: 14px; padding: 12px 0; }
+  .tag { display: inline-block; font-size: 11px; border-radius: 4px; padding: 2px 6px; background: #ddf4e4; color: #1a7f37; margin-right: 6px; }
+  .tag.session { background: #fff8c5; color: #9a6700; }
+  h2 { font-size: 15px; margin: 22px 0 10px; }
+</style>
+</head>
+<body>
+<h1>lanbus · 直连审批</h1>
+<div class="sub" id="peerinfo">连接中…</div>
+<div class="row" style="margin-bottom:16px">
+  <input id="secret" type="password" placeholder="审批密钥（approval.json 的 secret，或经 lanbus peer-ui 自动带入）">
+  <button class="ghost" onclick="saveSecret()">保存密钥</button>
+  <button class="ghost" onclick="refresh()">刷新</button>
+</div>
+<h2>待确认申请</h2>
+<div id="pending"><div class="empty">加载中…</div></div>
+<h2>已授权</h2>
+<div id="grants"><div class="empty">加载中…</div></div>
+<div id="toast"></div>
+<script>
+let SECRET = sessionStorage.getItem('lanbus_approval') || '';
+const hash = new URLSearchParams(location.hash.slice(1));
+if (hash.get('secret')) { SECRET = hash.get('secret'); sessionStorage.setItem('lanbus_approval', SECRET); history.replaceState(null, '', location.pathname); }
+document.getElementById('secret').value = SECRET;
+function saveSecret() { SECRET = document.getElementById('secret').value.trim(); sessionStorage.setItem('lanbus_approval', SECRET); refresh(); }
+function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.style.opacity = 1; setTimeout(() => t.style.opacity = 0, 3500); }
+async function api(path, payload) {
+  const opt = { headers: { 'X-Lanbus-Approval': SECRET, 'Content-Type': 'application/json' } };
+  if (payload !== undefined) { opt.method = 'POST'; opt.body = JSON.stringify(payload); }
+  const r = await fetch(path, opt);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
+  return body;
+}
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function ago(ts) { const s = Math.max(0, Date.now()/1000 - Number(ts||0)); return s < 60 ? Math.round(s) + ' 秒前' : Math.round(s/60) + ' 分钟前'; }
+async function refresh() {
+  if (!SECRET) { document.getElementById('peerinfo').textContent = '请先填入审批密钥'; return; }
+  try {
+    const health = await (await fetch('/peer/health')).json();
+    document.getElementById('peerinfo').textContent = `${health.name} · ${health.agent} · peer_id ${health.peer_id} · ${health.endpoint}`;
+    const inbox = await api('/peer/inbox');
+    const pending = inbox.requests || [];
+    document.getElementById('pending').innerHTML = pending.length ? pending.map(r => `
+      <div class="card">
+        <div class="meta">${esc(r.source?.hostname)} · ${esc(r.source?.agent)} · ${ago(r.created_at)} · request_id ${esc(r.request_id)}</div>
+        <div class="msg">${esc(r.message)}</div>
+        <div class="row">
+          <select id="scope-${esc(r.request_id)}">
+            <option value="chat" ${r.scope === 'chat' ? 'selected' : ''}>仅交流 chat</option>
+            <option value="project" ${r.scope === 'project' ? 'selected' : ''}>项目任务 project</option>
+          </select>
+          <input id="cwd-${esc(r.request_id)}" placeholder="工作目录（project 必填）" value="${esc(r.cwd || '')}" style="width:260px">
+          <button class="ok" onclick="approve('${esc(r.request_id)}','pair')">批准·配对</button>
+          <button class="warn" onclick="approve('${esc(r.request_id)}','session')">批准·会话(30分钟)</button>
+          <button class="no" onclick="deny('${esc(r.request_id)}')">拒绝</button>
+        </div>
+      </div>`).join('') : '<div class="empty">没有待确认的申请</div>';
+    const grants = inbox.grants || [];
+    document.getElementById('grants').innerHTML = grants.length ? grants.map(g => `
+      <div class="grant">
+        <span class="tag ${g.mode === 'session' ? 'session' : ''}">${esc(g.mode)}</span>
+        <span class="tag">${esc(g.scope)}</span>
+        <span class="meta">peer ${esc((g.peer_id||'').slice(0,12))}… · 授权于 ${ago(g.created_at)} · 最近使用 ${ago(g.last_used)}</span>
+        <div class="meta" style="margin-top:4px">${esc((g.cwds||[]).join(', '))}</div>
+        <div class="row"><button class="no" onclick="revoke('${esc(g.peer_id)}')">撤销该 peer 全部授权</button></div>
+      </div>`).join('') : '<div class="empty">暂无授权</div>';
+  } catch (e) { toast('错误：' + e.message); }
+}
+async function approve(id, mode) {
+  const scope = document.getElementById('scope-' + id).value;
+  const cwd = document.getElementById('cwd-' + id).value.trim();
+  try { await api('/peer/approve', { request_id: id, mode, scope, cwd: cwd || undefined }); toast('已批准（' + mode + ' / ' + scope + '）'); refresh(); }
+  catch (e) { toast('批准失败：' + e.message); }
+}
+async function deny(id) { try { await api('/peer/deny', { request_id: id }); toast('已拒绝'); refresh(); } catch (e) { toast(e.message); } }
+async function revoke(peer) { try { await api('/peer/revoke', { peer_id: peer }); toast('已撤销'); refresh(); } catch (e) { toast(e.message); } }
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

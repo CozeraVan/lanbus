@@ -43,3 +43,6 @@ Thumbs.db
 # client-local preset copies
 .claude/
 .mcp/
+
+# local test artifacts (worklog evidence stays local)
+runs/

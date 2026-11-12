@@ -6,7 +6,7 @@ Order of checks: **hub alive → worker registered → task claimed → logs flo
 |---|---|---|
 | `lanbus chat --to` cannot find a peer | target is offline, name is ambiguous, or direct worker is old | start the target with `worker --direct`; use `--to IP:8790`; default discovery includes `8790/8791` |
 | Direct request waits for confirmation | target user has not approved yet | on the target machine run `lanbus inbox --name NAME`, then `allow REQUEST_ID --pair` or `--session`; remote approval is intentionally rejected |
-| Direct request says grant/scope/cwd denied | grant expired/revoked or requested capability exceeds approval | create a new request and approve the required scope/cwd locally; persistent chat does not grant project-task access |
+| Direct request says grant/scope/cwd denied | grant expired/revoked or requested capability exceeds approval | `chat`/`run` auto re-pair when the cached grant is stale (target must approve again); for scope/cwd denial approve the required scope/cwd locally; persistent chat does not grant project-task access |
 | Peer identity changed | target key changed or a peer may be impersonated | do not approve automatically; verify the machine and fingerprint, then revoke the old peer locally before pairing again |
 | `lan_envs` shows no workers | worker crashed or wrong env name | check worker terminal; env string must match exactly (`windows` ≠ `Windows`) |
 | Task stays `queued` forever | no worker with that `env`/`required_caps`, or worker cannot reach hub | `curl http://HUB:8788/health` from the worker host; worker prints `claim failed` on error; check `lan_envs` `caps` for `browser` tasks |
@@ -39,6 +39,11 @@ Order of checks: **hub alive → worker registered → task claimed → logs flo
 | Two agents clobber each other's edits | same files via `/mnt/d` and `D:\` | one tree — partition tasks by file, don't run two edits on one file |
 | Wheel installs but writes to site-packages fail | stale build writing next to the source | data lives in `~/.lanbus`; override with `LANBUS_DATA_DIR` |
 | `worker: submit deferred` repeatedly | hub down, token wrong, or outbox blocked | fix connectivity/token; outbox is retried every 10 s; files live in `~/.lanbus/outbox/<name>/` |
+| `discover` misses a direct peer but `peers --url` works | old Go `lanbus-scan` (<=0.1.0) lacks the `/peer/health` probe | Python now merges lanbus-peer probes into the Go report automatically; rebuild the scanner with the probe when a Go toolchain is available |
+| Tests crash with `UnicodeDecodeError: 'gbk'` on Chinese Windows | subprocess text mode used the locale encoding | fixed: tests pin `encoding="utf-8"`; `PYTHONUTF8=1` is no longer required |
+| Remote agent cannot run tests/commands (`requires approval`) | the agent CLI's own permission layer (e.g. claude `acceptEdits`) | start the worker with `--agent-permission-mode bypassPermissions` (trusted LAN only) or configure the CLI allowlist; lanbus target-side approval is separate and still required |
+| `pip` on macOS fails with `Cannot connect to proxy` | a system proxy (e.g. Clash) is configured but not running | `export no_proxy='*'`; also upgrade pip first — pip <21.3 cannot do PEP 660 editable installs |
+| `peers` shows `endpoint: http://127.0.0.1:8790` on a remote machine | old worker advertised loopback | fixed: wildcard-bound workers advertise the caller's Host or the primary LAN IP |
 
 ## Collecting a report
 

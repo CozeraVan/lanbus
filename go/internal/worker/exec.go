@@ -129,13 +129,17 @@ func (w *Worker) runAgent(t *Task, cwd, composed, promptFile string, cancel chan
 		return runShellStdin(cmd, cwd, stdin, cancel, t.TimeoutS, log)
 	}
 	agent := w.cfg.Agent
+	permMode := w.cfg.AgentPermissionMode
+	if permMode == "" {
+		permMode = "acceptEdits"
+	}
 	switch agent {
 	case "claude":
 		if w.cfg.PTY {
-			r := runStreamingPTY("claude", []string{"-p", "--permission-mode", "acceptEdits"}, "", cwd, composed, cancel, t.TimeoutS, logFn(log))
+			r := runStreamingPTY("claude", []string{"-p", "--permission-mode", permMode}, "", cwd, composed, cancel, t.TimeoutS, logFn(log))
 			return r.code, r.output
 		}
-		r := runStreaming("claude", []string{"-p", "--permission-mode", "acceptEdits"}, "", cwd, composed, cancel, t.TimeoutS, logFn(log))
+		r := runStreaming("claude", []string{"-p", "--permission-mode", permMode}, "", cwd, composed, cancel, t.TimeoutS, logFn(log))
 		return r.code, r.output
 	case "codex":
 		if w.cfg.PTY {

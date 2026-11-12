@@ -15,7 +15,10 @@ def test_normalize_hub():
         connections.normalize_hub("http://host:8788/mcp")
 
 
-def test_save_resolve_and_remove_per_hub(tmp_path):
+def test_save_resolve_and_remove_per_hub(tmp_path, monkeypatch):
+    # 隔离本机真实 ~/.lanbus/token.txt（legacy_token 回退），避免凭据泄漏进断言。
+    monkeypatch.setenv("LANBUS_DATA_DIR", str(tmp_path / "empty-data"))
+    monkeypatch.delenv("LANBUS_TOKEN", raising=False)
     path = str(tmp_path / "private" / "connections.json")
     connections.save_connection("192.168.1.236", "secret-a", path)
     connections.save_connection("192.168.1.240", "secret-b", path)
@@ -78,6 +81,7 @@ def test_chat_uses_saved_hub_token_and_online_envs(monkeypatch):
 def test_connect_noninteractive_missing_token(monkeypatch, capsys, tmp_path):
     from lanbus import cli
     monkeypatch.setenv("LANBUS_CONNECTIONS_FILE", str(tmp_path / "connections.json"))
+    monkeypatch.setenv("LANBUS_DATA_DIR", str(tmp_path / "empty-data"))
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(cli, "_health", lambda hub: {"ok": True, "version": "1.9.0-go"})
     monkeypatch.delenv("LANBUS_TOKEN", raising=False)

@@ -241,6 +241,19 @@ def pairing_status(url, request_id, peer_id):
                         urllib.parse.quote(peer_id))
 
 
+def _primary_lan_ip():
+    """尽力获取主网卡 LAN IPv4（UDP connect 不发包）；离线时返回空串。"""
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("10.255.255.255", 1))
+            return probe.getsockname()[0]
+        finally:
+            probe.close()
+    except OSError:
+        return ""
+
+
 class PeerServer:
     def __init__(self, name, agent, cwd, command, data_dir, host="0.0.0.0", port=8790,
                  executor=None):
@@ -265,6 +278,7 @@ class PeerServer:
         except FileNotFoundError:
             self.approval_secret = uuid.uuid4().hex + uuid.uuid4().hex
             _atomic_json(secret_path, {"secret": self.approval_secret}, private=True)
+        self.bind_host = host
         self.http = ThreadingHTTPServer((host, int(port)), self._handler())
         self.http.daemon_threads = True
         self.port = self.http.server_address[1]
@@ -273,6 +287,9 @@ class PeerServer:
                                        name=f"peer-{name}", daemon=True)
 
     def start(self):
+        _atomic_json(os.path.join(self.data_dir, "peer.json"),
+                     {"name": self.name, "port": self.port, "url": self.url,
+                      "peer_id": self.identity.peer_id})
         self.thread.start()
         return self
 
@@ -281,10 +298,30 @@ class PeerServer:
         self.http.server_close()
         self.thread.join(timeout=5)
 
-    def _public_peer(self):
+    def _public_peer(self, host_header=None):
         return {"name": self.name, "agent": self.agent, "hostname": socket.gethostname(),
                 "peer_id": self.identity.peer_id, "direct_pairing": True,
-                "endpoint": self.url, "scopes": ["chat", "project"]}
+                "endpoint": self._advertised_endpoint(host_header),
+                "scopes": ["chat", "project"]}
+
+    def _advertised_endpoint(self, host_header=None):
+        # 绑定通配地址时通告 LAN 可达端点：优先调用方实际使用的 Host，
+        # 否则主网卡 IP，避免远端客户端拿到无用的 127.0.0.1。
+        if self.bind_host not in ("0.0.0.0", "::", ""):
+            return self.url
+        candidate = (host_header or "").strip()
+        host = candidate
+        if host.startswith("["):
+            host = host.split("]")[0].lstrip("[")
+        elif host.count(":") == 1:
+            host = host.rsplit(":", 1)[0]
+        host = host.lower()
+        if host and host != "localhost" and not host.startswith("127.") and host != "::1":
+            return f"http://{candidate}"
+        ip = _primary_lan_ip()
+        if ip:
+            return f"http://{ip}:{self.port}"
+        return self.url
 
     def _expire(self):
         cutoff = time.time()
@@ -426,7 +463,22 @@ class PeerServer:
             def do_GET(self):
                 parsed = urllib.parse.urlsplit(self.path)
                 if parsed.path == "/peer/health":
-                    status, value = 200, server._public_peer()
+                    status, value = 200, server._public_peer(self.headers.get("Host"))
+                elif parsed.path == "/peer/ui":
+                    if not is_loopback(self.client_address[0]):
+                        status, value = 403, {"error": "审批页面只能在本机打开"}
+                    else:
+                        html_path = os.path.join(os.path.dirname(__file__),
+                                                 "static", "peer_approval.html")
+                        with open(html_path, encoding="utf-8") as handle:
+                            raw = handle.read().encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/html; charset=utf-8")
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Content-Length", str(len(raw)))
+                        self.end_headers()
+                        self.wfile.write(raw)
+                        return
                 elif parsed.path == "/peer/pair/status":
                     status, value = server._status(urllib.parse.parse_qs(parsed.query))
                 elif parsed.path == "/peer/inbox":
@@ -559,6 +611,17 @@ class DirectClient:
         if not grant or (scope and grant.get("scope") != scope and grant.get("scope") != "project"):
             return None
         return grant
+
+    def drop_grant(self, target_peer_id):
+        try:
+            with open(self.credentials_path, encoding="utf-8") as handle:
+                saved = json.load(handle)
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            raise ValueError("直连凭证文件损坏") from exc
+        if isinstance(saved, dict) and saved.pop(target_peer_id, None) is not None:
+            _atomic_json(self.credentials_path, saved, private=True)
 
     def request(self, grant, message, scope, cwd="", timeout=300):
         signature = grant.get("target_signature") or ""

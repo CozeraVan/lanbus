@@ -30,9 +30,22 @@ func main() {
 	flag.BoolVar(&cfg.PTY, "pty", false, "run agent commands on a real PTY (ConPTY on Windows)")
 	flag.BoolVar(&cfg.Insecure, "insecure", false, "skip TLS verification")
 	flag.BoolVar(&cfg.Version, "version", false, "print version")
+	flag.BoolVar(&cfg.Direct, "direct", false, "zero-config direct peering (no hub/token)")
+	flag.IntVar(&cfg.DirectPort, "direct-port", 8790, "direct peer port")
+	flag.StringVar(&cfg.DirectBind, "direct-bind", "0.0.0.0", "direct bind address")
+	flag.StringVar(&cfg.DirectDataDir, "direct-data-dir", "", "direct identity/grant dir (default ~/.lanbus/peers/<name>)")
+	flag.StringVar(&cfg.AgentPermissionMode, "agent-permission-mode", os.Getenv("LANBUS_AGENT_PERMISSION_MODE"),
+		"override agent --permission-mode (e.g. bypassPermissions on trusted LAN)")
 	flag.Parse()
 	if cfg.Version {
 		fmt.Println("lanbus-worker-go 1.9.0")
+		return
+	}
+	if cfg.Direct {
+		if err := worker.RunDirect(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "lanbus-worker:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if cfg.Name == "" || cfg.Env == "" || cfg.Hub == "" {

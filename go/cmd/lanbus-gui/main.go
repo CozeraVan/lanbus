@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -31,6 +32,48 @@ import (
 var icon []byte
 
 var _ embed.FS
+
+// peerEntry is a discoverable local direct-peer approval page.
+type peerEntry struct{ name, url string }
+
+// peerUIEntries scans <home>/.lanbus/peers/*/ for peer.json + approval.json and
+// builds the loopback approval URLs (secret carried in the URL fragment so it is
+// never sent to the server). Used by the tray menu; extracted for testability.
+func peerUIEntries(home string) []peerEntry {
+	var peers []peerEntry
+	entries, err := os.ReadDir(filepath.Join(home, ".lanbus", "peers"))
+	if err != nil {
+		return peers
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(home, ".lanbus", "peers", e.Name())
+		raw, err := os.ReadFile(filepath.Join(dir, "peer.json"))
+		if err != nil {
+			continue
+		}
+		var info struct {
+			URL string `json:"url"`
+		}
+		if json.Unmarshal(raw, &info) != nil || info.URL == "" {
+			continue
+		}
+		secRaw, err := os.ReadFile(filepath.Join(dir, "approval.json"))
+		if err != nil {
+			continue
+		}
+		var sec struct {
+			Secret string `json:"secret"`
+		}
+		if json.Unmarshal(secRaw, &sec) != nil || sec.Secret == "" {
+			continue
+		}
+		peers = append(peers, peerEntry{e.Name(), info.URL + "/peer/ui#secret=" + sec.Secret})
+	}
+	return peers
+}
 
 type proxyHandler struct {
 	proxy *httputil.ReverseProxy
@@ -109,6 +152,20 @@ func main() {
 		systray.SetTooltip("lanbus local agent bus")
 		open := systray.AddMenuItem("打开面板", "显示 lanbus 窗口")
 		browser := systray.AddMenuItem("浏览器打开", "在默认浏览器打开 /ui")
+		// Direct-peer approval pages (loopback-only; secret via URL fragment).
+		home, _ := os.UserHomeDir()
+		peers := peerUIEntries(home)
+		if len(peers) > 0 {
+			systray.AddSeparator()
+			for _, p := range peers {
+				item := systray.AddMenuItem("审批: "+p.name, "打开直连审批页面")
+				go func(url string, ch <-chan struct{}) {
+					for range ch {
+						_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+					}
+				}(p.url, item.ClickedCh)
+			}
+		}
 		systray.AddSeparator()
 		quit := systray.AddMenuItem("退出", "关闭 lanbus")
 		go func() {

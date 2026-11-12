@@ -282,7 +282,7 @@ def test_worker_direct_mode_needs_no_hub_or_token(tmp_path):
         "--env", "direct", "--direct", "--direct-port", str(port),
         "--direct-data-dir", str(tmp_path / "direct-worker"),
         "--agent", "shell", "--cmd", "cat", "--cwd", str(tmp_path)],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
     try:
         deadline = peer.time.time() + 10
         health = None
@@ -316,7 +316,7 @@ def test_zero_config_cross_process_chat_with_local_consent(tmp_path):
         "--direct-data-dir", str(target_data), "--agent", "shell",
         "--cmd", f'{sys.executable} "{fake}" "{{prompt_file}}"',
         "--cwd", str(tmp_path)], env=target_env, stdout=target_log,
-        stderr=subprocess.STDOUT, text=True)
+        stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
     caller = None
     try:
         deadline = peer.time.time() + 10
@@ -333,7 +333,7 @@ def test_zero_config_cross_process_chat_with_local_consent(tmp_path):
         caller = subprocess.Popen([
             sys.executable, "-m", "lanbus", "chat", "--to", f"http://127.0.0.1:{port}",
             "--message", "cross process hello", "--timeout", "30"],
-            env=caller_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            env=caller_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         secret = json.loads((target_data / "approval.json").read_text(encoding="utf-8"))["secret"]
         while peer.time.time() < deadline:
             inbox = peer.local_request(port, "/peer/inbox", None, secret)
@@ -345,7 +345,8 @@ def test_zero_config_cross_process_chat_with_local_consent(tmp_path):
             sys.executable, "-m", "lanbus", "allow", request_id,
             "--url", f"http://127.0.0.1:{port}", "--data-dir", str(target_data),
             "--pair", "--scope", "chat"], env=caller_env,
-            capture_output=True, text=True, timeout=10)
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10)
         assert approved.returncode == 0, approved.stdout + approved.stderr
         output, _ = caller.communicate(timeout=20)
         assert caller.returncode == 0, output
@@ -353,7 +354,8 @@ def test_zero_config_cross_process_chat_with_local_consent(tmp_path):
         second = subprocess.run([
             sys.executable, "-m", "lanbus", "chat", "--to", f"http://127.0.0.1:{port}",
             "--message", "second without approval", "--timeout", "30"],
-            env=caller_env, capture_output=True, text=True, timeout=20)
+            env=caller_env, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=20)
         assert second.returncode == 0, second.stdout + second.stderr
         assert "second without approval" in second.stdout
     finally:
@@ -388,3 +390,121 @@ def test_pairing_replay_and_rate_limit(tmp_path):
             peer.request_pairing(server.url, caller, "too fast", "chat", "")
     finally:
         server.stop()
+
+
+def test_health_advertises_reachable_endpoint(tmp_path, monkeypatch):
+    import http.client
+    server = peer.PeerServer(name="target-agent", agent="fake", cwd=str(tmp_path),
+                             data_dir=str(tmp_path / "target"), command="unused",
+                             host="0.0.0.0", port=0).start()
+    try:
+        def health(host_header):
+            conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+            conn.request("GET", "/peer/health", headers={"Host": host_header})
+            response = conn.getresponse()
+            value = json.loads(response.read().decode("utf-8"))
+            conn.close()
+            return value
+        assert health(f"192.168.1.236:{server.port}")["endpoint"] == \
+            f"http://192.168.1.236:{server.port}"
+        monkeypatch.setattr(peer, "_primary_lan_ip", lambda: "192.168.1.236")
+        assert health(f"127.0.0.1:{server.port}")["endpoint"] == \
+            f"http://192.168.1.236:{server.port}"
+        assert health(f"localhost:{server.port}")["endpoint"] == \
+            f"http://192.168.1.236:{server.port}"
+    finally:
+        server.stop()
+
+
+def test_client_drop_grant_removes_only_target(tmp_path):
+    client = peer.DirectClient("http://127.0.0.1:1", str(tmp_path / "caller"))
+    client.save_grant(grant(target_peer_id="target-1"))
+    client.save_grant(grant(grant_id="grant-b", target_peer_id="target-2"))
+    client.drop_grant("target-1")
+    assert client.find_grant("target-1") is None
+    assert client.find_grant("target-2")["grant_id"] == "grant-b"
+    client.drop_grant("missing")
+    assert client.find_grant("target-2")["grant_id"] == "grant-b"
+
+
+def test_cli_auto_repairs_after_revoke(tmp_path, monkeypatch, capsys):
+    import threading
+    from lanbus import cli
+    server = running_server(tmp_path, executor=lambda **kw: {"ok": True, "reply": "pong"})
+    monkeypatch.setenv("LANBUS_PEER_DIR", str(tmp_path / "cli-caller"))
+    monkeypatch.delenv("LANBUS_TOKEN", raising=False)
+    monkeypatch.delenv("LANBUS_HUB", raising=False)
+
+    def chat_in_thread(message):
+        result = []
+        thread = threading.Thread(target=lambda: result.append(cli.main([
+            "chat", "--to", server.url, "--message", message, "--timeout", "30"])))
+        thread.start()
+        return thread, result
+
+    def approve_next():
+        deadline = peer.time.time() + 5
+        while peer.time.time() < deadline:
+            inbox = peer.local_request(server.port, "/peer/inbox", None,
+                                       server.approval_secret)
+            if inbox["requests"]:
+                request_id = inbox["requests"][0]["request_id"]
+                assert cli.main(["allow", request_id, "--url", server.url,
+                                 "--data-dir", str(tmp_path / "target"),
+                                 "--pair", "--scope", "chat"]) == 0
+                return
+            peer.time.sleep(0.05)
+        raise AssertionError("no pairing request appeared")
+
+    try:
+        thread, result = chat_in_thread("first")
+        approve_next()
+        thread.join(timeout=10)
+        assert result == [0]
+        caller = peer.Identity.load(str(tmp_path / "cli-caller"))
+        peer.local_request(server.port, "/peer/revoke", {"peer_id": caller.peer_id},
+                           server.approval_secret)
+        capsys.readouterr()
+        thread, result = chat_in_thread("after revoke")
+        approve_next()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+        assert result == [0]
+        output = capsys.readouterr()
+        assert "pong" in output.out
+        assert "自动重新发起配对" in output.err
+    finally:
+        server.stop()
+
+
+def test_discovery_merges_peers_into_go_report(tmp_path):
+    from lanbus import discovery
+    server = running_server(tmp_path)
+    try:
+        rep = {"engine": "go",
+               "hosts": [{"ip": "127.0.0.1", "alive": True, "ports": [22],
+                          "services": [], "agents": []}],
+               "agents": [],
+               "summary": {"agent_endpoints": 0, "hosts_with_agents": 0,
+                           "agent_kinds": []}}
+        merged = discovery._merge_lanbus_peers(rep, peer_ports=(server.port,))
+        direct = [a for a in merged["agents"] if a["kind"] == "lanbus-peer"]
+        assert len(direct) == 1
+        assert direct[0]["endpoint"] == f"http://127.0.0.1:{server.port}"
+        assert merged["hosts"][0]["agents"][0]["peer_id"] == server.identity.peer_id
+        assert merged["summary"]["agent_endpoints"] == 1
+        assert "lanbus-peer" in merged["summary"]["agent_kinds"]
+        again = discovery._merge_lanbus_peers(merged, peer_ports=(server.port,))
+        assert len([a for a in again["agents"] if a["kind"] == "lanbus-peer"]) == 1
+    finally:
+        server.stop()
+
+
+def test_apply_permission_mode_overrides_only_existing_flag():
+    from lanbus import worker
+    base = worker.DEFAULTS["claude"]
+    assert worker.apply_permission_mode(base, "bypassPermissions") == \
+        "claude -p --permission-mode bypassPermissions"
+    assert worker.apply_permission_mode(base, "") == base
+    assert worker.apply_permission_mode("codex exec -", "bypassPermissions") == "codex exec -"
+    assert worker.apply_permission_mode("", "bypassPermissions") == ""
