@@ -72,13 +72,13 @@ func (h *Hub) toolDispatch(a map[string]any) map[string]any {
 	}
 	env := strings.TrimSpace(asString(a["env"]))
 	tid := newID()
-	maxRetry := asInt(a["max_retry"])
-	if maxRetry == 0 {
-		maxRetry = 2
+	maxRetry := 2
+	if _, ok := a["max_retry"]; ok {
+		maxRetry = max(0, asInt(a["max_retry"]))
 	}
-	maxRec := asInt(a["max_recoveries"])
-	if maxRec == 0 {
-		maxRec = 3
+	maxRec := 3
+	if _, ok := a["max_recoveries"]; ok {
+		maxRec = max(0, asInt(a["max_recoveries"]))
 	}
 	lease := asInt(a["lease_s"])
 	if lease <= 0 {
@@ -298,16 +298,10 @@ func (h *Hub) resultMap(r map[string]any, includeImages bool) map[string]any {
 	delete(row, "claim_token")
 	delete(row, "last_claim_token")
 	for _, k := range []string{"result", "verify_out", "feedback", "review_note"} {
-		if s := asString(row[k]); len(s) > 20000 {
-			row[k] = s[:20000]
-		}
+		row[k] = trunc(asString(row[k]), 20000)
 	}
-	if len(asString(row["diff"])) > 200000 {
-		row["diff"] = asString(row["diff"])[:200000]
-	}
-	if len(asString(row["composed_prompt"])) > 40000 {
-		row["composed_prompt"] = asString(row["composed_prompt"])[:40000]
-	}
+	row["diff"] = trunc(asString(row["diff"]), 200000)
+	row["composed_prompt"] = trunc(asString(row["composed_prompt"]), 40000)
 	for _, k := range []string{"browser", "discover_spec", "ask_spec", "artifact_globs", "required_caps"} {
 		if s := asString(row[k]); s != "" {
 			var v any
@@ -379,37 +373,75 @@ func (h *Hub) toolAwait(a map[string]any) map[string]any {
 func (h *Hub) toolReview(a map[string]any) map[string]any {
 	tid := asString(a["task_id"])
 	verdict := strings.ToLower(asString(a["verdict"]))
-	row, _ := h.store.one("SELECT * FROM tasks WHERE id=?", tid)
+	if verdict != "approve" && verdict != "rework" {
+		return map[string]any{"error": "verdict must be approve|rework"}
+	}
+	row, err := h.store.one("SELECT * FROM tasks WHERE id=?", tid)
+	if err != nil {
+		return map[string]any{"error": err.Error(), "task_id": tid}
+	}
 	if row == nil {
 		return map[string]any{"error": "not found", "task_id": tid}
 	}
+	if asString(row["status"]) != StatusSubmitted {
+		return map[string]any{"error": "only submitted can be reviewed", "status": row["status"], "task_id": tid}
+	}
+	stateChanged := func() map[string]any {
+		current, _ := h.store.one("SELECT status FROM tasks WHERE id=?", tid)
+		return map[string]any{"error": "task state changed during review", "status": asString(current["status"]), "task_id": tid}
+	}
+	feedback := asString(a["feedback"])
 	if verdict == "approve" {
-		if asString(row["status"]) != StatusSubmitted {
-			return map[string]any{"error": "task is not submitted", "status": row["status"]}
+		res, err := h.store.exec(`UPDATE tasks SET status='approved', review_note=?, finished_at=?, updated_at=?
+			WHERE id=? AND status='submitted'`, feedback, nowText(), nowText(), tid)
+		if err != nil {
+			return map[string]any{"error": err.Error(), "task_id": tid}
 		}
-		_, _ = h.store.exec("UPDATE tasks SET status='approved', updated_at=?, review_note=? WHERE id=?", nowText(), asString(a["feedback"]), tid)
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return stateChanged()
+		}
 		h.emit("task.approved", map[string]any{"id": tid})
 		return map[string]any{"task_id": tid, "status": StatusApproved}
 	}
-	if verdict == "rework" {
-		retry := asInt(row["retry"]) + 1
-		maxRetry := asInt(row["max_retry"])
-		if maxRetry == 0 {
-			maxRetry = 2
-		}
-		if retry > maxRetry {
-			_, _ = h.store.exec("UPDATE tasks SET status='failed', retry=?, feedback=?, updated_at=?, review_note=? WHERE id=?", retry, asString(a["feedback"]), nowText(), "rework retries exhausted", tid)
-			h.emit("task.failed", map[string]any{"id": tid})
-			return map[string]any{"task_id": tid, "status": StatusFailed, "reason": "rework retries exhausted"}
-		}
-		_, _ = h.store.exec(`UPDATE tasks SET status='queued', retry=?, feedback=?, worker=NULL,
-			claim_token=NULL, last_claim_token=NULL, started_at=NULL, finished_at=NULL,
-			lease_expires_at=NULL, heartbeat_at=NULL, cancel_requested=0, updated_at=? WHERE id=?`,
-			retry, asString(a["feedback"]), nowText(), tid)
-		h.emit("task.rework", map[string]any{"id": tid, "retry": retry})
-		return map[string]any{"task_id": tid, "status": StatusQueued, "retry": retry}
+
+	old := asString(row["feedback"])
+	merged := strings.TrimSpace(old + "\n---\n" + feedback)
+	if old == "" {
+		merged = feedback
 	}
-	return map[string]any{"error": "verdict must be approve|rework"}
+	if asInt(row["retry"]) >= asInt(row["max_retry"]) {
+		res, err := h.store.exec(`UPDATE tasks SET status='failed', feedback=?, review_note=?, finished_at=?, updated_at=?
+			WHERE id=? AND status='submitted'`, merged, "rework retries exhausted", nowText(), nowText(), tid)
+		if err != nil {
+			return map[string]any{"error": err.Error(), "task_id": tid}
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return stateChanged()
+		}
+		h.emit("task.failed", map[string]any{"id": tid})
+		return map[string]any{"task_id": tid, "status": StatusFailed, "reason": "rework retries exhausted"}
+	}
+	retry := asInt(row["retry"]) + 1
+	res, err := h.store.exec(`UPDATE tasks SET status='queued', retry=?, feedback=?, worker=NULL,
+		claim_token=NULL, last_claim_token=NULL, started_at=NULL, finished_at=NULL,
+		lease_expires_at=NULL, heartbeat_at=NULL, cancel_requested=0, cancel_reason=NULL,
+		composed_prompt=NULL, result=NULL, diff=NULL, changed=NULL, verify_ok=NULL,
+		verify_out=NULL, exit_code=NULL, review_note=?, updated_at=?
+		WHERE id=? AND status='submitted'`, retry, merged, feedback, nowText(), tid)
+	if err != nil {
+		return map[string]any{"error": err.Error(), "task_id": tid}
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return stateChanged()
+	}
+	if _, err := h.store.exec("DELETE FROM artifacts WHERE task_id=?", tid); err != nil {
+		return map[string]any{"error": err.Error(), "task_id": tid, "status": StatusQueued}
+	}
+	h.emit("task.rework", map[string]any{"id": tid, "retry": retry, "feedback": feedback})
+	return map[string]any{"task_id": tid, "status": StatusQueued, "retry": retry}
 }
 
 func (h *Hub) toolCancel(a map[string]any) map[string]any {

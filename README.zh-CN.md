@@ -102,6 +102,37 @@ MCP `lan_dispatch` / `lan_dispatch_many` / `lan_envs` / `lan_list` / `lan_result
 `lanbusd`，对比 status、exit code、verify 和任务结果。Go hub 现在是 8788 上的默认 hub；
 Python hub（`lanbus hub` / `start-hub-python.cmd`）保留为 browser/legacy 回退。
 
+### 零配置跨机 Agent 直连（Python Worker）
+
+被指挥机器启动直连 Worker，不需要 Hub 或 token：
+
+```bash
+lanbus worker --name mac-agent --env macos --direct --cwd ~/project --agent claude
+```
+
+发起机器直接对话或提交项目任务：
+
+```bash
+lanbus chat --to mac-agent --message "请介绍你的环境，并给出协作方案"
+lanbus run --to 192.168.1.236:8790 --cwd /Users/me/project --message "检查项目并运行测试"
+```
+
+首次请求会在目标终端显示待确认 ID，发起端自动等待。目标用户在本机执行：
+
+```bash
+lanbus inbox --name mac-agent
+lanbus allow REQUEST_ID --name mac-agent --pair --scope chat
+# 或仅本次会话：lanbus allow REQUEST_ID --name mac-agent --session --scope project --cwd ~/project
+```
+
+批准后请求自动继续；持续配对后续无需确认，会话授权空闲 30 分钟或目标重启后失效。`lanbus revoke PEER_ID --name mac-agent` 可在目标本机撤销。默认扫描包含直连端口 `8790`、`8791`，也可显式使用 IP:port。
+
+直连采用 Ed25519 身份、X25519 密钥协商和 AES-GCM 加密。私密文件在 POSIX 下使用 `0700` 目录、`0600` 文件和原子写入；审批、拒绝、撤销只接受目标本机回环请求。项目任务限制在批准的 cwd 内，但底层 agent CLI 不等于完整 OS 沙箱，授权前仍应检查来源和请求内容。
+
+### Hub 模式（兼容已有部署）
+
+已有 Hub 部署仍可使用 `lanbus connect HOST` 保存按 Hub 隔离的 agent token，然后运行不带 `--to` 的 `lanbus chat --message`，自动选择 2–4 个在线 Worker。显式 `--hub`、`--token`、`--envs` 优先；远程人工确认继续使用 `lanbus web`。这套兼容流程与新的 Agent 直连互不影响。
+
 ### 本机多 agent 对话
 
 每个本机 agent 启一个 worker（Linux 侧 A agent CLI、Windows 侧 B agent CLI、C agent 桌面端、WSL agent 各自一个 env），然后由 hub 按顺序接力：

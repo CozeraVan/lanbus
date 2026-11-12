@@ -4,9 +4,16 @@ Order of checks: **hub alive → worker registered → task claimed → logs flo
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| `lanbus chat --to` cannot find a peer | target is offline, name is ambiguous, or direct worker is old | start the target with `worker --direct`; use `--to IP:8790`; default discovery includes `8790/8791` |
+| Direct request waits for confirmation | target user has not approved yet | on the target machine run `lanbus inbox --name NAME`, then `allow REQUEST_ID --pair` or `--session`; remote approval is intentionally rejected |
+| Direct request says grant/scope/cwd denied | grant expired/revoked or requested capability exceeds approval | create a new request and approve the required scope/cwd locally; persistent chat does not grant project-task access |
+| Peer identity changed | target key changed or a peer may be impersonated | do not approve automatically; verify the machine and fingerprint, then revoke the old peer locally before pairing again |
 | `lan_envs` shows no workers | worker crashed or wrong env name | check worker terminal; env string must match exactly (`windows` ≠ `Windows`) |
 | Task stays `queued` forever | no worker with that `env`/`required_caps`, or worker cannot reach hub | `curl http://HUB:8788/health` from the worker host; worker prints `claim failed` on error; check `lan_envs` `caps` for `browser` tasks |
-| `401 unauthorized` | wrong role token | `/mcp` needs the agent token; `/worker/*` accepts the worker token (and the agent token as operator). Compare `~/.lanbus/token.txt` / `worker-token.txt` |
+| `401 unauthorized` | wrong role token or stale saved profile | `/mcp` needs the agent token; `/worker/*` accepts the worker token (and the agent token as operator). Run `lanbus connect HOST --token NEW_TOKEN` to replace the token for that hub. Tokens are isolated per hub; compare `~/.lanbus/token.txt` / `worker-token.txt` for legacy setups |
+| `lanbus chat` reports fewer than 2 online workers | no saved/explicit env selection and too few online workers | check `lanbus connect --status`, start another worker, or pass `--envs ENV_A,ENV_B` explicitly |
+| `lanbus connect` finds multiple hubs | automatic connection is intentionally unambiguous | rerun as `lanbus connect HOST`; default discovery includes lanbus ports `8788` and `8789` |
+| `human_confirmation_required` | remote target has not been approved | run `lanbus web` on the hub and approve the exact remote env, then retry; connection profiles do not bypass approval |
 | `403 bad host` | client reached the hub via a hostname | use an IP literal, or add the name to `LANBUS_HOSTS` |
 | `lan_logs` is empty but the task is running | agent buffers stdout, or the worker cannot reach `/worker/log` | run the agent with `PYTHONUNBUFFERED=1` / `stdio` flush; check the worker console for `hub unreachable`; local copy is in `~/.lanbus/logs/` |
 | `lan_cancel` returns cancelled but the process keeps running | worker is stuck on a network call, or it is an old worker without progress polling | upgrade the worker; check `progress` responses; the hub reaper will eventually requeue if the lease expires, but the process tree is only killed by a worker that polls |

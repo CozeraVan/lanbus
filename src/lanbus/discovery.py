@@ -47,6 +47,8 @@ BASE_PORTS = [
     8080, 8081, 8082, 8083, 8084, 8088, 8090, 8095,
     8188,              # ComfyUI
     8501,              # Streamlit
+    8788, 8789,        # lanbus hub
+    8790, 8791,        # lanbus direct peer
     8888,              # Jupyter
     9000, 9090,
     11434,             # Ollama
@@ -57,7 +59,7 @@ BASE_PORTS = [
 AI_KINDS = {
     "ollama", "lmstudio", "openai", "vllm", "localai", "llamacpp",
     "openwebui", "comfyui", "gradio", "jupyter", "chrome-devtools",
-    "mcp", "lanbus", "anythingllm", "dify", "n8n", "langflow",
+    "mcp", "lanbus", "lanbus-peer", "anythingllm", "dify", "n8n", "langflow",
     "textgen", "sillytavern", "koboldcpp", "streamlit", "ai-api",
 }
 
@@ -888,6 +890,16 @@ def probe_http(ip, port, timeout=HTTP_TIMEOUT, api_key="", tls=False):
                 docs=f"{scheme}://{ip}:{port}/docs",
                 version=str(info.get("version") or ""),
                 paths=len(paths), api="openapi")
+
+    # lanbus direct peer（公开健康和身份元数据，不代表已授权）
+    st, hdr, data = _http(ip, port, "GET", "/peer/health", timeout=timeout,
+                          api_key=api_key, tls=tls)
+    obj = _json_body(data)
+    if st == 200 and isinstance(obj, dict) and obj.get("direct_pairing") and obj.get("peer_id"):
+        add("lanbus-peer", name=str(obj.get("name") or "lanbus-peer"),
+            endpoint=f"{scheme}://{ip}:{port}", peer_id=obj["peer_id"],
+            hostname=obj.get("hostname") or "", agent=obj.get("agent") or "",
+            direct_pairing=True)
 
     # lanbus hub
     st, hdr, data = _http(ip, port, "GET", "/health", timeout=timeout, api_key=api_key, tls=tls)

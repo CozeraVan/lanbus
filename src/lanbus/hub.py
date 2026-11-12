@@ -301,8 +301,9 @@ def t_dispatch(args):
 
     tid = uuid.uuid4().hex[:12]
     env = (args.get("env") or "").strip()
-    retry = max(0, int(args.get("max_retry", 2) or 0))
-    max_rec = max(0, int(args.get("max_recoveries", MAX_RECOVERIES) or 0))
+    retry = max(0, int(args["max_retry"])) if "max_retry" in args else 2
+    max_rec = (max(0, int(args["max_recoveries"]))
+               if "max_recoveries" in args else MAX_RECOVERIES)
     lease_s = max(5, int(args.get("lease_s", LEASE_S) or LEASE_S))
     timeout_s = max(1, int(args.get("timeout_s", 900) or 900))
     priority = int(args.get("priority", 0) or 0)
@@ -796,48 +797,60 @@ def t_review(args):
     """主 agent 的验收闸门：approve 放行 / rework 打回并带上修改意见。"""
     tid = args["task_id"]
     verdict = (args.get("verdict") or "").lower()
-    r = q("SELECT * FROM tasks WHERE id=?", (tid,), one=True)
-    if not r:
-        return {"error": "not found", "task_id": tid}
     if verdict not in ("approve", "rework", "fail"):
         return {"error": "verdict must be approve|rework|fail"}
-    if r["status"] in TERMINAL:
-        return {"error": f"task already {r['status']}", "task_id": tid,
-                "status": r["status"]}
     feedback = args.get("feedback", "") or ""
-    if verdict == "approve":
+    with _lock:
+        r = q("SELECT * FROM tasks WHERE id=?", (tid,), one=True)
+        if not r:
+            return {"error": "not found", "task_id": tid}
+        if r["status"] in TERMINAL:
+            return {"error": f"task already {r['status']}", "task_id": tid,
+                    "status": r["status"]}
+        if verdict == "approve":
+            if r["status"] != "submitted":
+                return {"error": f"only submitted can be approved (now {r['status']})",
+                        "task_id": tid, "status": r["status"]}
+            cur = x("""UPDATE tasks SET status='approved', review_note=?, finished_at=?,
+                              updated_at=? WHERE id=? AND status='submitted'""",
+                    (feedback, now(), now(), tid))
+            if not cur.rowcount:
+                current = q("SELECT status FROM tasks WHERE id=?", (tid,), one=True)
+                return {"error": "task state changed during review", "task_id": tid,
+                        "status": current["status"]}
+            emit("task.approved", {"id": tid})
+            return {"task_id": tid, "status": "approved"}
+        if verdict == "fail":
+            set_status(tid, "failed", review_note=feedback, cancel_requested=1,
+                       cancel_reason=feedback or "failed by reviewer", finished_at=now())
+            return {"task_id": tid, "status": "failed"}
         if r["status"] != "submitted":
-            return {"error": f"only submitted can be approved (now {r['status']})",
+            return {"error": f"only submitted can be reworked (now {r['status']})",
                     "task_id": tid, "status": r["status"]}
-        set_status(tid, "approved", review_note=feedback, finished_at=now())
-        return {"task_id": tid, "status": "approved"}
-    if verdict == "fail":
-        set_status(tid, "failed", review_note=feedback, cancel_requested=1,
-                   cancel_reason=feedback or "failed by reviewer", finished_at=now())
-        return {"task_id": tid, "status": "failed"}
-    if r["status"] != "submitted":
-        return {"error": f"only submitted can be reworked (now {r['status']})",
-                "task_id": tid, "status": r["status"]}
-    if r["retry"] >= r["max_retry"]:
-        set_status(tid, "failed", review_note=f"[超出重试上限] {feedback}",
-                   finished_at=now())
-        return {"task_id": tid, "status": "failed",
-                "reason": f"retry {r['retry']}/{r['max_retry']} exhausted"}
-    old = (r["feedback"] or "")
-    merged = (old + "\n---\n" + feedback).strip() if old else feedback
-    x("""UPDATE tasks SET status='queued', retry=retry+1, feedback=?,
-                          worker=NULL, claim_token=NULL, last_claim_token=NULL,
-                          lease_expires_at=NULL, heartbeat_at=NULL,
-                          cancel_requested=0, cancel_reason=NULL,
-                          composed_prompt=NULL, finished_at=NULL,
-                          result=NULL, diff=NULL, changed=NULL, verify_ok=NULL,
-                          verify_out=NULL, exit_code=NULL, review_note=?,
-                          updated_at=? WHERE id=?""",
-      (merged, feedback, now(), tid))
-    x("DELETE FROM artifacts WHERE task_id=?", (tid,))
-    emit("task.rework", {"id": tid, "retry": r["retry"] + 1, "feedback": feedback})
-    return {"task_id": tid, "status": "queued", "retry": r["retry"] + 1,
-            "note": "已打回，worker 会带着 feedback 重做"}
+        if r["retry"] >= r["max_retry"]:
+            set_status(tid, "failed", review_note=f"[超出重试上限] {feedback}",
+                       finished_at=now())
+            return {"task_id": tid, "status": "failed",
+                    "reason": f"retry {r['retry']}/{r['max_retry']} exhausted"}
+        old = (r["feedback"] or "")
+        merged = (old + "\n---\n" + feedback).strip() if old else feedback
+        cur = x("""UPDATE tasks SET status='queued', retry=retry+1, feedback=?,
+                              worker=NULL, claim_token=NULL, last_claim_token=NULL,
+                              lease_expires_at=NULL, heartbeat_at=NULL,
+                              cancel_requested=0, cancel_reason=NULL,
+                              composed_prompt=NULL, finished_at=NULL,
+                              result=NULL, diff=NULL, changed=NULL, verify_ok=NULL,
+                              verify_out=NULL, exit_code=NULL, review_note=?,
+                              updated_at=? WHERE id=? AND status='submitted'""",
+                (merged, feedback, now(), tid))
+        if not cur.rowcount:
+            current = q("SELECT status FROM tasks WHERE id=?", (tid,), one=True)
+            return {"error": "task state changed during review", "task_id": tid,
+                    "status": current["status"]}
+        x("DELETE FROM artifacts WHERE task_id=?", (tid,))
+        emit("task.rework", {"id": tid, "retry": r["retry"] + 1, "feedback": feedback})
+        return {"task_id": tid, "status": "queued", "retry": r["retry"] + 1,
+                "note": "已打回，worker 会带着 feedback 重做"}
 
 
 def t_list(args):
@@ -1643,23 +1656,31 @@ def worker_api(op, a):
         return {"task": task}
     if op == "progress":
         tid = a.get("task_id")
-        r, err = _task_for_worker(tid, name, a.get("claim_token"))
+        claim = a.get("claim_token") or ""
+        r, err = _task_for_worker(tid, name, claim)
         if err:
             return err
         if r["status"] not in ACTIVE:
             return {"ok": False, "invalid": True, "status": r["status"],
                     "cancel": [tid] if r["status"] == "cancelled" else []}
         lease = int(r.get("lease_s") or LEASE_S)
-        x("""UPDATE tasks SET heartbeat_at=?, lease_expires_at=?, updated_at=?
-              WHERE id=?""", (now(), now(lease), now(), tid))
+        cur = x("""UPDATE tasks SET heartbeat_at=?, lease_expires_at=?, updated_at=?
+                     WHERE id=? AND worker=? AND COALESCE(claim_token,'')=?
+                       AND status IN ('claimed','running')""",
+                (now(), now(lease), now(), tid, name, claim))
+        if not cur.rowcount:
+            current = q("SELECT status FROM tasks WHERE id=?", (tid,), one=True)
+            return {"ok": False, "invalid": True,
+                    "status": current["status"] if current else "not_found"}
         x("UPDATE workers SET last_seen=? WHERE name=?", (now(), name))
-        cancelled = bool(r.get("cancel_requested")) or r["status"] == "cancelled"
+        cancelled = bool(r.get("cancel_requested"))
         return {"ok": True, "now": now(), "cancel": [tid] if cancelled else [],
                 "status": r["status"],
                 "lease_expires_at": now(lease)}
     if op == "log":
         tid = a.get("task_id")
-        r, err = _task_for_worker(tid, name, a.get("claim_token"))
+        claim = a.get("claim_token") or ""
+        r, err = _task_for_worker(tid, name, claim)
         if err:
             return err
         if r["status"] not in ACTIVE:
@@ -1672,6 +1693,12 @@ def worker_api(op, a):
         with _lock:
             c = db()
             try:
+                fresh = c.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
+                if not fresh or fresh["status"] not in ACTIVE \
+                        or fresh["worker"] != name \
+                        or (fresh["claim_token"] or "") != claim:
+                    return {"ok": False, "stale": True,
+                            "status": fresh["status"] if fresh else "not_found"}
                 for ln in lines:
                     if not isinstance(ln, dict):
                         ln = {"text": str(ln)}
@@ -1688,11 +1715,16 @@ def worker_api(op, a):
                         "VALUES(?,?,?,?,?)", (tid, seq, stream, text, now()))
                     n += max(0, cur.rowcount)
                     last_seq = max(last_seq, seq)
-                c.execute("""UPDATE tasks SET log_seq=?, log_lines=COALESCE(log_lines,0)+?,
-                                  last_log_at=?, heartbeat_at=?, lease_expires_at=?,
-                                  updated_at=? WHERE id=?""",
-                          (last_seq, n, now(), now(),
-                           now(int(r.get("lease_s") or LEASE_S)), now(), tid))
+                cur = c.execute("""UPDATE tasks SET log_seq=?, log_lines=COALESCE(log_lines,0)+?,
+                                          last_log_at=?, heartbeat_at=?, lease_expires_at=?,
+                                          updated_at=? WHERE id=? AND worker=?
+                                            AND COALESCE(claim_token,'')=?
+                                            AND status IN ('claimed','running')""",
+                                (last_seq, n, now(), now(),
+                                 now(int(r.get("lease_s") or LEASE_S)), now(), tid, name, claim))
+                if not cur.rowcount:
+                    c.rollback()
+                    return {"ok": False, "stale": True, "status": "changed"}
                 c.commit()
             finally:
                 c.close()
@@ -1803,7 +1835,10 @@ def worker_api(op, a):
             if a.get("force") or age > float(a.get("max_age_s", 15) or 15) \
                     or parse_ts(r.get("lease_expires_at") or "") < time.time():
                 ok = _recover_task(r, f"worker {name} restarted / lost")
-                (failed if ok == "failed" else done).append(r["id"])
+                if ok == "failed":
+                    failed.append(r["id"])
+                elif ok == "queued":
+                    done.append(r["id"])
         return {"ok": True, "recovered": done, "failed": failed}
     if op == "leave":
         x("UPDATE workers SET last_seen=?,current_task=NULL WHERE name=?",
@@ -1898,24 +1933,37 @@ def _recover_task(r, reason):
     tid = r["id"]
     with _lock:
         fresh = q("SELECT * FROM tasks WHERE id=?", (tid,), one=True)
-        if not fresh or fresh["status"] not in ACTIVE:
+        if not fresh or fresh["status"] not in ACTIVE \
+                or fresh.get("worker") != r.get("worker") \
+                or (fresh.get("claim_token") or "") != (r.get("claim_token") or ""):
             return None
         rec = int(fresh.get("recoveries") or 0) + 1
-        max_rec = int(fresh.get("max_recoveries") or MAX_RECOVERIES)
+        max_rec = (int(fresh["max_recoveries"])
+                   if fresh.get("max_recoveries") is not None else MAX_RECOVERIES)
+        worker = fresh.get("worker") or ""
+        claim = fresh.get("claim_token") or ""
         if rec > max_rec:
-            x("""UPDATE tasks SET status='failed', recoveries=?, worker=NULL,
-                      claim_token=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
-                      review_note=?, finished_at=?, updated_at=? WHERE id=?""",
-              (rec, f"[执行租约丢失] {reason}", now(), now(), tid))
+            cur = x("""UPDATE tasks SET status='failed', recoveries=?, worker=NULL,
+                              claim_token=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
+                              review_note=?, finished_at=?, updated_at=?
+                        WHERE id=? AND status IN ('claimed','running')
+                          AND worker=? AND COALESCE(claim_token,'')=?""",
+                    (rec, f"[执行租约丢失] {reason}", now(), now(), tid, worker, claim))
+            if not cur.rowcount:
+                return None
             emit("task.failed", {"id": tid, "recoveries": rec, "reason": reason})
             _append_hub_log(tid, f"[hub] 执行租约丢失，已超过恢复上限：{reason}")
             return "failed"
-        x("""UPDATE tasks SET status='queued', recoveries=?, worker=NULL,
-                  last_claim_token=claim_token, claim_token=NULL,
-                  lease_expires_at=NULL, heartbeat_at=NULL,
-                  cancel_requested=0, cancel_reason=NULL, composed_prompt=NULL,
-                  review_note=?, updated_at=? WHERE id=?""",
-          (rec, f"[自动重排 {rec}/{max_rec}] {reason}", now(), tid))
+        cur = x("""UPDATE tasks SET status='queued', recoveries=?, worker=NULL,
+                          last_claim_token=claim_token, claim_token=NULL,
+                          lease_expires_at=NULL, heartbeat_at=NULL,
+                          cancel_requested=0, cancel_reason=NULL, composed_prompt=NULL,
+                          review_note=?, updated_at=?
+                    WHERE id=? AND status IN ('claimed','running')
+                      AND worker=? AND COALESCE(claim_token,'')=?""",
+                (rec, f"[自动重排 {rec}/{max_rec}] {reason}", now(), tid, worker, claim))
+        if not cur.rowcount:
+            return None
         emit("task.recovered", {"id": tid, "recoveries": rec, "reason": reason,
                                 "status": "queued"})
         _append_hub_log(tid, f"[hub] worker 失联，任务自动重排：{reason}")

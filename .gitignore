@@ -5,6 +5,7 @@ bus.db-shm
 artifacts/
 token.txt
 bin/
+.tools/
 go/*.exe
 worker-token.txt
 operator-token.txt

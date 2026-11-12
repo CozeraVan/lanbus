@@ -953,7 +953,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", required=True)
     ap.add_argument("--env", required=True, help="windows | wsl | macos | 自定义")
-    ap.add_argument("--hub", required=True, help="http://<hub主机IP>:8788")
+    ap.add_argument("--hub", default=os.environ.get("LANBUS_HUB", ""),
+                    help="http://<hub主机IP>:8788；--direct 模式不需要")
+    ap.add_argument("--direct", action="store_true", help="启用零配置直连，不连接 Hub")
+    ap.add_argument("--direct-port", type=int, default=8790)
+    ap.add_argument("--direct-bind", default="0.0.0.0")
+    ap.add_argument("--direct-data-dir", default="")
     ap.add_argument("--token",
                     default=os.environ.get("LANBUS_WORKER_TOKEN")
                     or os.environ.get("LANBUS_TOKEN", "devtoken"))
@@ -978,6 +983,24 @@ def main():
     ap.add_argument("--insecure", action="store_true",
                     help="https 时跳过证书校验（仅限可信 LAN/Tailscale）")
     a = ap.parse_args()
+    if a.direct:
+        from .peer import PeerServer
+        data_dir = a.direct_data_dir or os.path.join(
+            os.path.expanduser("~"), ".lanbus", "peers", a.name)
+        server = PeerServer(name=a.name, agent=a.agent, cwd=a.cwd or os.getcwd(),
+                            command=a.cmd or DEFAULTS.get(a.agent, ""), data_dir=data_dir,
+                            host=a.direct_bind, port=a.direct_port)
+        server.start()
+        print(f"[worker:{a.name}] direct={server.url} peer_id={server.identity.peer_id}",
+              flush=True)
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            server.stop()
+        return
+    if not a.hub:
+        ap.error("非直连模式必须提供 --hub；零配置模式请使用 --direct")
     w = Worker(a)
     if w.browser_info.get("ok"):
         print(f"[worker:{w.name}] browser caps: {w.browser_info.get('caps')}", flush=True)

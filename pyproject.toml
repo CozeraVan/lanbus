@@ -22,7 +22,7 @@ classifiers = [
   "Topic :: Software Development :: Build Tools",
   "Topic :: System :: Distributed Computing",
 ]
-dependencies = []
+dependencies = ["cryptography>=42"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]

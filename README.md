@@ -104,6 +104,37 @@ and task result. The Go hub is now the **default** on port 8788; the Python hub
 remains available as a fallback (`lanbus hub` / `start-hub-python.cmd`) for
 browser-task and legacy compatibility.
 
+### Zero-config direct agent peering (Python Worker)
+
+Start a direct worker on the target machine. No hub or token is needed:
+
+```bash
+lanbus worker --name mac-agent --env macos --direct --cwd ~/project --agent claude
+```
+
+Chat or submit a project task from another machine:
+
+```bash
+lanbus chat --to mac-agent --message "Introduce your environment and propose a collaboration plan"
+lanbus run --to 192.168.1.236:8790 --cwd /Users/me/project --message "Inspect the project and run tests"
+```
+
+The first request waits while the target terminal shows its request ID. On the target machine, the local user runs:
+
+```bash
+lanbus inbox --name mac-agent
+lanbus allow REQUEST_ID --name mac-agent --pair --scope chat
+# Or this session only: lanbus allow REQUEST_ID --name mac-agent --session --scope project --cwd ~/project
+```
+
+The waiting request continues automatically after approval. Persistent pairs need no repeated approval; session grants expire after 30 idle minutes or a target restart. Revoke locally with `lanbus revoke PEER_ID --name mac-agent`. Discovery includes direct ports `8790` and `8791`; an explicit IP:port also works.
+
+Direct peering uses Ed25519 identities, X25519 key agreement, and AES-GCM encryption. On POSIX, private files use `0700` directories, `0600` files, and atomic writes. Approval, denial, and revocation accept only loopback requests on the target. Project tasks are confined to approved working directories, but the underlying agent CLI is not a complete OS sandbox; inspect the source and request before approving.
+
+### Hub mode (existing deployments)
+
+Existing hub deployments can still use `lanbus connect HOST` to save a per-hub agent token, followed by `lanbus chat --message` without `--to` to select 2–4 online workers automatically. Explicit `--hub`, `--token`, and `--envs` take precedence, and remote confirmation still uses `lanbus web`. This compatibility flow is independent of direct peering.
+
 ### Local multi-agent chat
 
 Start one worker per local agent - a Linux-side A agent CLI, a Windows-side B agent CLI, a C agent desktop, a WSL agent - each with its own env name, then let the hub relay a conversation:
