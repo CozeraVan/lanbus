@@ -9,12 +9,15 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/CozeraVan/lanbus/go/internal/backup"
 	"github.com/CozeraVan/lanbus/go/internal/daemon"
+	"github.com/CozeraVan/lanbus/go/internal/peerui"
 	"github.com/CozeraVan/lanbus/go/internal/version"
 )
 
@@ -30,6 +33,8 @@ func main() {
 		fmt.Println("lanbus " + version.String())
 	case "healthcheck":
 		err = healthcheck(args)
+	case "peer-ui":
+		err = peerUI(args, openBrowser)
 	case "backup":
 		err = backupCmd(args)
 	case "restore":
@@ -55,6 +60,7 @@ func usage() {
 Usage:
   lanbus version                          print version
   lanbus healthcheck [--url URL]          probe hub /health (exit 0=ok)
+  lanbus peer-ui --name NAME [--data-dir DIR]
   lanbus backup [--data-dir DIR] [--out FILE]
   lanbus restore [--data-dir DIR] ARCHIVE
   lanbus daemon install|uninstall|status [--name N] [--exe PATH]
@@ -65,6 +71,44 @@ Usage:
 func defaultDataDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".lanbus")
+}
+
+func peerUI(args []string, opener func(string) error) error {
+	fs := flag.NewFlagSet("peer-ui", flag.ContinueOnError)
+	name := fs.String("name", "", "direct peer name")
+	dataDir := fs.String("data-dir", "", "peer data directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *name == "" || *name == "." || *name == ".." || filepath.IsAbs(*name) || strings.ContainsAny(*name, `/\\`) {
+		return fmt.Errorf("peer-ui: --name must be a single peer directory name")
+	}
+	dir := *dataDir
+	if dir == "" {
+		dir = filepath.Join(defaultDataDir(), "peers", *name)
+	}
+	approvalURL, err := peerui.ApprovalURL(dir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("审批页面：%s（密钥经 URL 片段自动带入，不会发往服务器）\n", strings.Split(approvalURL, "#")[0])
+	return opener(approvalURL)
+}
+
+func openBrowser(rawURL string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", rawURL)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL)
+	default:
+		cmd = exec.Command("xdg-open", rawURL)
+	}
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("peer-ui: open browser: %w", err)
+	}
+	return nil
 }
 
 func healthcheck(args []string) error {
@@ -85,10 +129,11 @@ func healthcheck(args []string) error {
 		return fmt.Errorf("healthcheck: status %d", resp.StatusCode)
 	}
 	var parsed map[string]any
-	if json.Unmarshal(body, &parsed) == nil {
-		if ok, _ := parsed["ok"].(bool); !ok {
-			return fmt.Errorf("healthcheck: ok=false")
-		}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return fmt.Errorf("healthcheck: invalid JSON response: %w", err)
+	}
+	if ok, _ := parsed["ok"].(bool); !ok {
+		return fmt.Errorf("healthcheck: ok=false")
 	}
 	fmt.Println(string(body))
 	return nil

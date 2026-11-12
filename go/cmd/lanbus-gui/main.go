@@ -7,7 +7,6 @@ package main
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -26,6 +25,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/CozeraVan/lanbus/go/internal/hub"
+	"github.com/CozeraVan/lanbus/go/internal/peerui"
 )
 
 //go:embed icon.ico
@@ -36,41 +36,12 @@ var _ embed.FS
 // peerEntry is a discoverable local direct-peer approval page.
 type peerEntry struct{ name, url string }
 
-// peerUIEntries scans <home>/.lanbus/peers/*/ for peer.json + approval.json and
-// builds the loopback approval URLs (secret carried in the URL fragment so it is
-// never sent to the server). Used by the tray menu; extracted for testability.
+// peerUIEntries adapts the shared loopback-only peer discovery for the tray.
 func peerUIEntries(home string) []peerEntry {
-	var peers []peerEntry
-	entries, err := os.ReadDir(filepath.Join(home, ".lanbus", "peers"))
-	if err != nil {
-		return peers
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		dir := filepath.Join(home, ".lanbus", "peers", e.Name())
-		raw, err := os.ReadFile(filepath.Join(dir, "peer.json"))
-		if err != nil {
-			continue
-		}
-		var info struct {
-			URL string `json:"url"`
-		}
-		if json.Unmarshal(raw, &info) != nil || info.URL == "" {
-			continue
-		}
-		secRaw, err := os.ReadFile(filepath.Join(dir, "approval.json"))
-		if err != nil {
-			continue
-		}
-		var sec struct {
-			Secret string `json:"secret"`
-		}
-		if json.Unmarshal(secRaw, &sec) != nil || sec.Secret == "" {
-			continue
-		}
-		peers = append(peers, peerEntry{e.Name(), info.URL + "/peer/ui#secret=" + sec.Secret})
+	items := peerui.Entries(home)
+	peers := make([]peerEntry, 0, len(items))
+	for _, item := range items {
+		peers = append(peers, peerEntry{name: item.Name, url: item.URL})
 	}
 	return peers
 }
