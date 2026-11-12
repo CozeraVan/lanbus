@@ -233,6 +233,38 @@ lanbus ask --endpoint 192.168.1.60:1234 --prompt "review this diff" --model qwen
 
 Important limit: a **GUI-only** agent that opens no port (a C agent desktop) can only be seen as a process on the machine where it runs. To see it from another machine, run a lanbus worker there or run `lanbus discover` on that host. Remote discovery is inherently limited to what the network exposes.
 
+## Install from a release (finished product)
+
+Prebuilt installers are published on [GitHub Releases](https://github.com/CozeraVan/lanbus/releases) for all three platforms — **no Python required**:
+
+| Platform | Artifact | Install |
+|---|---|---|
+| Windows | `lanbus-<ver>-setup.exe` / portable `.zip` | run the installer, or unzip + `start-hub.cmd` |
+| macOS | `lanbus-<ver>-macos-arm64.pkg` | `sudo installer -pkg … -target /` |
+| Linux | `lanbus_<ver>_amd64.deb` | `sudo dpkg -i …` |
+
+Each ships the native binaries `lanbus` (CLI), `lanbusd` (hub), `lanbus-worker`, `lanbus-scan`, plus the Windows GUI. Releases carry `SHA256SUMS.txt`. Details: [docs/install.md](docs/install.md).
+
+### Product CLI & service
+
+The native `lanbus` CLI operates the product without Python:
+
+```bash
+lanbus version                             # stamped release version
+lanbus healthcheck --url http://HUB:8788   # exit 0 when online
+lanbus backup                              # archive SQLite(WAL)+tokens to ~/.lanbus/backups/
+lanbus restore ~/.lanbus/backups/lanbus-<ts>.zip
+lanbus daemon install                      # hub autostart: Windows task / macOS launchd / Linux systemd
+lanbus daemon status
+lanbus daemon uninstall
+```
+
+`lanbusd` generates a **strong random agent token** on first run (persisted to `~/.lanbus/token.txt`); pass `--allow-dev-token` only for development. Optional TLS (`--tls-cert` / `--tls-key`) and a loopback-only pprof listener (`--pprof 127.0.0.1:6060`). See [docs/security.md](docs/security.md).
+
+Releases are built by `.github/workflows/release.yml` on a `v*` tag (cross-platform binaries + Windows GUI + wheel + checksums). See [docs/release.md](docs/release.md).
+
+---
+
 ## Quick start (3 minutes)
 
 ### 1. Hub — on the always-on machine (usually Windows)
@@ -464,8 +496,8 @@ After it connects, `lan_envs` shows `mac-a-cli` with the adapter capability, and
 
 ```bash
 pip install -e ".[dev]"
-pytest -v                     # 39 tests: protocol, dispatch/rework, logs, cancel/interrupt, lease recovery, artifacts, roles, discovery, chat, web UI, local supervisor, Go hub tools/dual-run, remote confirmation
-make go-test                  # Go scanner + worker tests
+pytest -v                     # 88 tests: protocol, dispatch/rework, logs, cancel/interrupt, lease recovery, artifacts, roles, discovery, chat, web UI, local supervisor, Go hub tools/dual-run, remote confirmation, direct peering
+make go-test                  # Go scanner + worker + hub + backup + daemon tests
 make go-scan                  # native bin/lanbus-scan; Python auto-detects it
 make go-worker                # native bin/lanbus-worker
 python -m pip wheel . --no-deps --no-build-isolation -w dist
@@ -475,9 +507,13 @@ Tests spin up a real hub and real workers on free ports and drive actual MCP JSO
 
 ## Docs
 
+- [Install](docs/install.md) — prebuilt installers, service setup, healthcheck/backup
+- [Release](docs/release.md) — tag-driven pipeline, installers, signing/notarization
+- [Security](docs/security.md) — tokens, TLS, approval, pprof, backup
 - [Architecture](docs/architecture.md) — components, why workers pull, state machine, evidence model
 - [Protocol](docs/protocol.md) — every endpoint, tool schema, error codes, SSE events
 - [Troubleshooting](docs/troubleshooting.md) — symptom → cause → fix
+- [Worklog](docs/WORKLOG.md) — completion status and verified boundaries
 - [Go migration assessment](docs/go-migration.md) — why/if to move the core to Go, magpie patterns
 - [Go scanner and worker](go/README.md) — Phase 0/1 native binaries
 - [中文说明](README.zh-CN.md) · [发布指南](PUBLISHING.md) · [变更记录](CHANGELOG.md) · [贡献指南](CONTRIBUTING.md)

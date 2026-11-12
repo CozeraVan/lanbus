@@ -78,3 +78,36 @@
 ## 五、运行态基线
 
 - hub `:8788`；win-agent `:8790`（Python，claude）；go-agent `:8791`（Go，claude，计划任务）；mac-agent `:8790`（Go，claude，launchd）。
+
+## 六、产品化（可上线成品）推进 — 2026-11-12
+
+目标：从「功能可用」推进到「可签名分发、一键安装、可运维」的成品。路线 P1→P4。
+
+### P1 Go 产品 CLI + hub 加固 ✅ 完成（本机实测）
+- `internal/version`：单一版本源，ldflags `-X` 注入，与 `__version__` 对齐。
+- `internal/backup` + `lanbus backup/restore`：归档 bus.db(WAL)+token+config，zip-slip 安全恢复；往返单测 + 真实备份通过。
+- `internal/daemon` + `lanbus daemon install/uninstall/status`：Windows 当前用户登录任务（受限令牌自动回退 HKCU Run，免管理员）/ macOS launchd / Linux systemd user；渲染函数单测 + Windows 安装→状态→卸载闭环实测通过。
+- hub TLS 服务端（`--tls-cert/--tls-key`，自签证书握手单测通过）；pprof 独立 loopback 监听（`--pprof`，非环回拒绝，单测通过）。
+- 强 token 默认：`lanbusd` 无 token 时自动生成随机令牌持久化，`--allow-dev-token` 才允许 devtoken。
+- 新 `go/cmd/lanbus` 产品 CLI：version/healthcheck/backup/restore/daemon；冒烟通过。
+
+### P2 发行流水线 + 跨平台打包 ✅ 完成（三平台安装器实编 + 实机验证）
+- Makefile：版本注入 LDFLAGS + `go-cli`/`go-cli-all`/`release` 目标。
+- `.github/workflows/release.yml`：`v*` 标签触发，全平台 CLI 交叉编译 + Windows GUI + wheel + SHA256SUMS + GitHub Release（YAML 校验通过）。
+- **16 个交叉编译目标全过**。三平台安装器**实编**：
+  - Windows `dist/lanbus-1.9.0-setup.exe`（18.3MB，Inno Setup 实编；**静默安装→5 二进制 v1.9.0→静默卸载无残留**闭环通过）。
+  - macOS `lanbus-1.9.0-macos-arm64.pkg`（13.7MB，Mac 实机 pkgbuild/productbuild）。
+  - Linux `lanbus_1.9.0_amd64.deb`（8.4MB，WSL 实机 dpkg-deb，control/contents 有效）。
+- Windows 便携包 `dist/lanbus-1.9.0-windows-amd64.zip`（含 5 二进制，CLI 运行正常）。
+- 签名/更新脚本核验：`sign.ps1`（signtool+PFX+SHA256+时间戳）、`update.ps1`（下载+SHA256 校验+替换）逻辑就绪，待用户证书。
+
+### P3 文档 ✅ 完成
+- `docs/install.md`（三平台安装 + daemon 服务化 + 健康检查/备份）、`docs/release.md`（流水线 + 安装器 + 签名/公证占位 + 验收清单）、`docs/security.md`（令牌/TLS/审批/pprof/备份）。
+
+### P4 回归收口 ✅
+- Go `go vet ./...` + `go test ./...` 全绿（含 backup/daemon/hub TLS+pprof 新测试）；Python 88/88。
+- **daemon 三平台实机端到端**：Windows（HKCU Run/计划任务，免管理员）/ macOS（launchd state=running）/ Linux（systemd user active）；均 install→status→healthcheck(ok, v1.9.0)→uninstall 闭环通过。
+
+### 产品化剩余（仅用户侧机密/授权）
+1. **代码签名/公证证书**（Windows PFX、Apple Developer ID）——用户机密，脚本已占位就绪，不入库。
+2. **首次 tag 发行**：`git tag v1.9.x && git push origin v1.9.x` 触发 release.yml 产出正式 artifacts（需提交/推送授权）。

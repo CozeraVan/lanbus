@@ -44,6 +44,9 @@ type Config struct {
 	LeaseS           int
 	MaxArtifactBytes int64
 	DownloadDir      string
+	TLSCert          string // optional PEM cert file; enables HTTPS when set with TLSKey
+	TLSKey           string // optional PEM key file
+	PprofAddr        string // optional loopback addr (e.g. 127.0.0.1:6060) for net/http/pprof
 }
 
 type Event struct {
@@ -124,9 +127,19 @@ func (h *Hub) Handler() http.Handler { return http.HandlerFunc(h.route) }
 
 func (h *Hub) Run() error {
 	go h.reaper()
+	if h.cfg.PprofAddr != "" {
+		go h.servePprof()
+	}
 	addr := net.JoinHostPort(h.cfg.Bind, strconv.Itoa(h.cfg.Port))
 	srv := &http.Server{Addr: addr, Handler: h.Handler(), ReadHeaderTimeout: 10 * time.Second}
-	fmt.Printf("[lanbusd] listening %s version=%s data=%s\n", addr, h.cfg.Version, h.cfg.DataDir)
+	scheme := "http"
+	if h.cfg.TLSCert != "" && h.cfg.TLSKey != "" {
+		scheme = "https"
+	}
+	fmt.Printf("[lanbusd] listening %s://%s version=%s data=%s\n", scheme, addr, h.cfg.Version, h.cfg.DataDir)
+	if scheme == "https" {
+		return srv.ListenAndServeTLS(h.cfg.TLSCert, h.cfg.TLSKey)
+	}
 	return srv.ListenAndServe()
 }
 

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 VERSION = re.search(r'__version__\s*=\s*"([^"]+)"',
                    (ROOT / "src/lanbus/__init__.py").read_text(encoding="utf-8")).group(1)
 OUT = ROOT / "dist" / f"lanbus-{VERSION}-windows-amd64"
-BINS = ["lanbusd.exe", "lanbus-worker.exe", "lanbus-scan.exe", "lanbus-gui.exe"]
+BINS = ["lanbus.exe", "lanbusd.exe", "lanbus-worker.exe", "lanbus-scan.exe", "lanbus-gui.exe"]
 
 for b in BINS:
     if not (ROOT / "bin" / b).is_file():
@@ -66,6 +66,7 @@ python -m lanbus %*
    edit paths/token, then run `python -m lanbus local up` to keep agents online.
 
 Binaries:
+  bin\lanbus.exe        native product CLI (version/healthcheck/backup/restore/daemon)
   bin\lanbusd.exe       Go hub (default, port 8788)
   bin\lanbus-gui.exe    Wails/WebView2 window + tray
   bin\lanbus-worker.exe Go worker (claude/codex/kimi/deepseek/discover/ask/pty)
