@@ -42,8 +42,8 @@ rem Requires Python for `lanbus local`; edit examples\local.json for this machin
 python -m lanbus local up
 """, encoding="utf-8")
 
-(OUT / "lanbus.cmd").write_text("""@echo off
-python -m lanbus %*
+(OUT / "lanbus.cmd").write_text(r"""@echo off
+"%~dp0bin\lanbus.exe" %*
 """, encoding="utf-8")
 
 (OUT / "examples" / "local.json").write_text("""{

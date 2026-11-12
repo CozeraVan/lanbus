@@ -246,7 +246,8 @@ lanbus ask --endpoint 192.168.1.60:1234 --prompt "review this diff" --model qwen
 
 ```bash
 lanbus version                             # 注入的发行版本号
-lanbus healthcheck --url http://HUB:8788   # 在线时 exit 0
+lanbus healthcheck --url http://HUB:8788   # 仅健康 hub 返回 exit 0
+lanbus peer-ui --name my-agent             # 打开本机直连 agent 审批页
 lanbus backup                              # 归档 SQLite(WAL)+令牌 到 ~/.lanbus/backups/
 lanbus restore ~/.lanbus/backups/lanbus-<ts>.zip
 lanbus daemon install                      # hub 自启：Windows 任务 / macOS launchd / Linux systemd
@@ -256,7 +257,7 @@ lanbus daemon uninstall
 
 `lanbusd` 首次运行自动生成**强随机 agent 令牌**（持久化到 `~/.lanbus/token.txt`）；仅开发用 `--allow-dev-token`。可选 TLS（`--tls-cert` / `--tls-key`）与仅环回的 pprof 监听（`--pprof 127.0.0.1:6060`）。见 [docs/security.md](docs/security.md)。
 
-发行由 `.github/workflows/release.yml` 在 `v*` 标签触发（跨平台二进制 + Windows GUI + wheel + 校验和）。见 [docs/release.md](docs/release.md)。
+发行由 `.github/workflows/release.yml` 在 `v*` 标签触发（跨平台二进制 + Windows 便携 ZIP／Setup EXE + macOS PKG + Linux DEB + wheel + 校验和）。见 [docs/release.md](docs/release.md)。
 
 ---
 
@@ -500,7 +501,7 @@ lanbus worker --name mac-a-cli --env macos --hub http://HUB_LAN_IP:8788 --token 
 
 ```bash
 pip install -e ".[dev]"
-pytest -v                     # 88 项：协议、派单/打回、实时日志、取消/中断、租约恢复、产物、角色 token、侦查、对话、Web UI、本地 worker 管理、Go hub 工具/双跑、远程确认、直连 peering
+pytest -v                     # 91 项：协议、派单/打回、实时日志、取消/中断、租约恢复、产物、角色 token、侦查、对话、Web UI、本地 worker 管理、Go hub 工具/双跑、远程确认、直连 peering、发布产物
 make go-test                  # Go 扫描器 + worker + hub + backup + daemon 测试
 make go-scan                  # 构建 bin/lanbus-scan，Python 自动检测
 make go-worker                # 构建 bin/lanbus-worker

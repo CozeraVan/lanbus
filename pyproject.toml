@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lanbus"
-version = "1.9.0"
+dynamic = ["version"]
 description = "LAN-wide agent orchestration + zero-preinstall AI-agent discovery: dispatch to Windows/WSL/macOS, verify, rework."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -36,6 +36,9 @@ lanbus-worker = "lanbus.worker:main"
 [project.urls]
 Homepage = "https://github.com/CozeraVan/lanbus"
 Issues = "https://github.com/CozeraVan/lanbus/issues"
+
+[tool.setuptools.dynamic]
+version = {attr = "lanbus.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

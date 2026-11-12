@@ -251,7 +251,8 @@ The native `lanbus` CLI operates the product without Python:
 
 ```bash
 lanbus version                             # stamped release version
-lanbus healthcheck --url http://HUB:8788   # exit 0 when online
+lanbus healthcheck --url http://HUB:8788   # exit 0 only for a healthy lanbus hub
+lanbus peer-ui --name my-agent             # open local direct-peer approval page
 lanbus backup                              # archive SQLite(WAL)+tokens to ~/.lanbus/backups/
 lanbus restore ~/.lanbus/backups/lanbus-<ts>.zip
 lanbus daemon install                      # hub autostart: Windows task / macOS launchd / Linux systemd
@@ -261,7 +262,7 @@ lanbus daemon uninstall
 
 `lanbusd` generates a **strong random agent token** on first run (persisted to `~/.lanbus/token.txt`); pass `--allow-dev-token` only for development. Optional TLS (`--tls-cert` / `--tls-key`) and a loopback-only pprof listener (`--pprof 127.0.0.1:6060`). See [docs/security.md](docs/security.md).
 
-Releases are built by `.github/workflows/release.yml` on a `v*` tag (cross-platform binaries + Windows GUI + wheel + checksums). See [docs/release.md](docs/release.md).
+Releases are built by `.github/workflows/release.yml` on a `v*` tag (cross-platform binaries + Windows portable ZIP/Setup EXE + macOS PKG + Linux DEB + wheel + checksums). See [docs/release.md](docs/release.md).
 
 ---
 
@@ -496,7 +497,7 @@ After it connects, `lan_envs` shows `mac-a-cli` with the adapter capability, and
 
 ```bash
 pip install -e ".[dev]"
-pytest -v                     # 88 tests: protocol, dispatch/rework, logs, cancel/interrupt, lease recovery, artifacts, roles, discovery, chat, web UI, local supervisor, Go hub tools/dual-run, remote confirmation, direct peering
+pytest -v                     # 91 tests: protocol, dispatch/rework, logs, cancel/interrupt, lease recovery, artifacts, roles, discovery, chat, web UI, local supervisor, Go hub tools/dual-run, remote confirmation, direct peering, release assets
 make go-test                  # Go scanner + worker + hub + backup + daemon tests
 make go-scan                  # native bin/lanbus-scan; Python auto-detects it
 make go-worker                # native bin/lanbus-worker

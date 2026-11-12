@@ -111,3 +111,29 @@
 ### 产品化剩余（仅用户侧机密/授权）
 1. **代码签名/公证证书**（Windows PFX、Apple Developer ID）——用户机密，脚本已占位就绪，不入库。
 2. **首次 tag 发行**：`git tag v1.9.x && git push origin v1.9.x` 触发 release.yml 产出正式 artifacts（需提交/推送授权）。
+
+## 七、发布闭环复核与修复 — 2026-11-12
+
+本轮针对当前远端基线复核「原生健康检查 → 本机人工审批 → 标签发布」闭环，设计与实施计划分别见 `docs/superpowers/specs/2026-11-12-release-readiness-design.md` 和 `docs/superpowers/plans/2026-11-12-release-readiness.md`。
+
+### 已完成
+
+- `lanbus healthcheck` 现在只接受 HTTP 200、合法 JSON 对象且 `ok=true`；普通文本、错误 JSON、数组、缺少 `ok`、`ok=false` 和 HTTP 错误均返回非零。
+- 新增原生 `lanbus peer-ui --name NAME`，从本机直连元数据生成 loopback 审批地址并调用系统浏览器；不在终端输出 secret fragment。Windows 托盘与 CLI 共用 `internal/peerui`，拒绝远端／HTTPS URL、空密钥和路径穿越名称。
+- 发布流水线增加 Python／Go 测试门禁、标签与 `__version__` 一致性检查，以及 Windows Setup EXE／便携 ZIP、macOS PKG、Linux DEB 构建与产物存在性检查；全部任务成功后才汇总校验和并发布。
+- Windows 便携包根目录 `lanbus.cmd` 改为调用随包 `bin\lanbus.exe`，不再要求 Python；Python wheel 通过 `tool.setuptools.dynamic` 使用同一版本源。
+
+### 本轮实际验证
+
+- Python `compileall`、91/91 测试和 `pip check` 全部通过；新增 3 项发布静态回归测试。
+- Go `go test -count=1 ./...` 与 `go vet ./...` 全部通过。此前本轮 Windows GUI 以 `GOOS=windows GOARCH=amd64 go test -exec=true ./cmd/lanbus-gui` 完成交叉编译，未在 Windows 实机执行。
+- `actionlint` 对 `release.yml` 和 `ci.yml` 无告警；macOS／Linux 打包脚本 `bash -n` 通过；`git diff --check` 通过。
+- wheel 实际构建成功：`lanbus-1.9.0-py3-none-any.whl`。
+- macOS 四个 darwin-arm64 原生二进制实际构建，`dist/lanbus-1.9.0-macos-arm64.pkg` 由 `pkgbuild/productbuild` 实际生成；完整展开后四个 Payload 二进制与构建产物逐字节一致，LaunchDaemon plist 存在。
+- 原生黑盒健康检查：隔离 HTTP 服务返回普通文本时退出码为 1，返回 `{"ok":true}` 时退出码为 0；`lanbus version` 输出 1.9.0。审批 opener 使用注入测试，未打开真实浏览器。
+
+### 验证边界
+
+- 本轮未在本机生成 Windows Setup EXE 或 Linux DEB：`iscc` 与 `dpkg-deb` 不可用。二者由新增 release job 在对应平台构建，仍需 PR CI 与平台实机验收，不提前声称通过。
+- Windows 便携 ZIP 的本机补充重建在 Wails 依赖下载阶段遇到网络超时，未得到本轮新 ZIP；原生启动器内容由回归测试锁定，不将该次构建记为成功。
+- 未执行 Windows 实机审批、安装／卸载或签名／公证；证书、公网部署、daemon 首启等不在本轮范围内。
