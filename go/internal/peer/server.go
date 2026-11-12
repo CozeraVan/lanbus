@@ -63,9 +63,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Host == "" {
 		cfg.Host = "0.0.0.0"
 	}
-	if cfg.Port == 0 {
-		cfg.Port = 8790
-	}
 	if cfg.DataDir == "" {
 		home, _ := os.UserHomeDir()
 		cfg.DataDir = filepath.Join(home, ".lanbus", "peers", cfg.Name)

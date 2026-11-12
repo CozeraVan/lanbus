@@ -186,6 +186,19 @@ def test_direct_scope_cwd_and_revocation(tmp_path):
         server.stop()
 
 
+def test_default_echo_returns_message_without_running_empty_command(tmp_path):
+    server = peer.PeerServer(name="echo-target", agent="echo", cwd=str(tmp_path),
+                             command="", data_dir=str(tmp_path / "echo-peer"),
+                             host="127.0.0.1", port=0)
+    server.start()
+    try:
+        result = server.execute("你好世界", "chat", str(tmp_path))
+        assert result["ok"] is True
+        assert result["reply"] == "你好世界"
+    finally:
+        server.stop()
+
+
 def test_default_executor_runs_fake_agent(tmp_path):
     fake = os.path.join(os.path.dirname(__file__), "fake_agent.py")
     command = f'"{os.sys.executable}" "{fake}" "{{prompt_file}}"'

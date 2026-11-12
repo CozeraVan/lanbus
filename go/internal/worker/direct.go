@@ -38,6 +38,24 @@ func DefaultCommand(agent string) string {
 	}
 }
 
+func expandPromptFile(command, promptFile string, windows bool) string {
+	quoted := `"` + promptFile + `"`
+	if !windows {
+		quoted = `'` + strings.ReplaceAll(promptFile, `'`, `'"'"'`) + `'`
+	}
+	command = strings.ReplaceAll(command, `"{prompt_file}"`, quoted)
+	command = strings.ReplaceAll(command, `'{prompt_file}'`, quoted)
+	return strings.ReplaceAll(command, "{prompt_file}", quoted)
+}
+
+func windowsTempCommand(path string, read bool) (string, []string) {
+	args := []string{"/C"}
+	if read {
+		args = append(args, "type")
+	}
+	return "cmd.exe", append(args, path)
+}
+
 // RunDirect starts the zero-config direct peer server: no hub, no token,
 // target-side human approval via `lanbus inbox/allow` (same wire protocol
 // as the Python worker, so Python/Go initiators interoperate).
@@ -74,7 +92,7 @@ func RunDirect(cfg Config) error {
 			tmp.WriteString(message)
 			tmp.Close()
 			defer os.Remove(promptFile)
-			cmd := strings.ReplaceAll(command, "{prompt_file}", promptFile)
+			cmd := expandPromptFile(command, promptFile, runtime.GOOS == "windows")
 			stdin := message
 			if strings.Contains(command, "{prompt_file}") {
 				stdin = ""
@@ -98,7 +116,8 @@ func RunDirect(cfg Config) error {
 					} else {
 						tmp.WriteString("@echo off\r\nchcp 65001 >nul\r\n" + message + "\r\n")
 						tmp.Close()
-						r = runStreaming("", nil, tmp.Name(), cwd, "", cancel, int(timeout), nil)
+						name, args := windowsTempCommand(tmp.Name(), false)
+						r = runStreaming(name, args, "", cwd, "", cancel, int(timeout), nil)
 						os.Remove(tmp.Name())
 					}
 				} else {
@@ -112,7 +131,8 @@ func RunDirect(cfg Config) error {
 					} else {
 						tmp.WriteString(message + "\n")
 						tmp.Close()
-						r = runStreaming("", nil, "type "+tmp.Name(), cwd, "", cancel, int(timeout), nil)
+						name, args := windowsTempCommand(tmp.Name(), true)
+						r = runStreaming(name, args, "", cwd, "", cancel, int(timeout), nil)
 						os.Remove(tmp.Name())
 					}
 				} else {

@@ -511,6 +511,8 @@ def _peer_execute(self, message, scope, cwd, timeout=300):
         return self.executor(message=message, scope=scope, cwd=cwd, timeout=timeout)
     from .worker import run_streaming
     cwd = os.path.realpath(cwd or self.cwd)
+    if self.agent == "echo" and not self.command:
+        return {"ok": True, "exit_code": 0, "reply": message, "peer": self.name}
     fd, prompt_file = tempfile.mkstemp(prefix="lanbus-peer-", suffix=".md", text=True)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:

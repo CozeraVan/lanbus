@@ -22,7 +22,7 @@ USAGE = """lanbus —— LAN agent bus
 用法:
   lanbus hub     [--port 8788] [--bind 0.0.0.0] [--token T] [--worker-token W] [--data-dir DIR]
   lanbus worker  --name NAME --env ENV --hub URL [--agent claude] [--cwd DIR]
-  lanbus worker  --name NAME --env ENV --direct [--port 8790] [--agent claude]
+  lanbus worker  --name NAME --env ENV --direct [--direct-port 8790] [--agent claude]
   lanbus chat    --to PEER --message "..." [--timeout 300]
   lanbus run     --to PEER --cwd DIR --message "..."
   lanbus inbox|allow|deny|revoke [--name NAME]  # 目标机器本机审批

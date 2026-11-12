@@ -47,19 +47,26 @@
 ## 二、测试结果（本轮收口）
 
 - **Go**：`internal/peer`、`internal/worker`、`internal/scanner`、`cmd/lanbus-gui` 四包全过（`go test -count=1`）。
-- **Python**：87/87（`pytest -o addopts="" -q`）。
-- **跨机实测**：Windows→Mac claude、WSL→Go claude、Win→Mac echo、revoke→401→自愈重配对 均 ok。
+- **Python**：88/88（2026-11-12 追加 echo 回归测试后，`pytest tests -q`）。
+- **跨机实测**：Windows→Mac claude、WSL→Go claude、Win→Mac echo、revoke→401→自愈重配对 均 ok（上述为此前跨机验证记录，不是本轮 macOS 单机复测）。
+
+### 2026-11-12 追加缺陷收口
+
+- Go `peer.ServerConfig.Port=0` 不再被覆盖为 8790，测试及程序化调用可使用随机空闲端口；CLI 默认仍为 8790。全量 Go 测试不再与本机已有服务争用端口。
+- Python echo 空命令直接回显原消息，与 Go 行为一致，并新增中文回显回归测试。
+- Go 直连的 prompt 文件路径按平台引用；Windows echo/shell 改用 `cmd.exe` 参数数组执行，支持含空格的 Temp 路径。macOS 已验证命令构造、相关单测与 Windows worker 交叉编译，未进行 Windows 实机复测。
+- 修正 `worker --direct` 帮助中的参数名为 `--direct-port`。
+- 本轮验证：Python 88/88、Go `./...`、`go vet ./...`、Windows worker 交叉编译、`pip check`、`git diff --check` 均通过；原 PID 4857 的 8790 服务保持运行。
 
 ## 三、未完成 / 遗留缺陷与边界（如实标注）
 
 1. **magpie 网关隧道区别处理（未修网关本体）**：magpie 对隧道来源请求走系统代理拨号失败、本地走直连成功。本轮以「Mac claude 直连云端上游」绕开，**未修改 magpie 本体逻辑**；若需经 magpie 路由的其它隧道场景仍会复现，需排查 magpie 代理 bypass。
 2. **codex 模型托管块可能被重置**：`model="MiniMax-M3"` 位于 `# >>> teamorouter-codex` 托管块，该工具日后可能重置模型；`responses_websocket=false` 在托管块外，持久有效。codex 仍有非致命 responses websocket stderr 警告（exit 0）。
 3. **dsh headless permission preset 警告**：`configure defaultPreset explicitly`，非致命、不影响回复；可配置 headless profile `defaultPreset` 消除（未做）。
-4. **Python worker echo 适配器路径差异**：本轮中文乱码修复针对 Go worker；Python `DEFAULTS["echo"]=""` 走不同路径（空命令返回 skip），其 echo 语义与 Go 不一致，**未在本轮统一**（属既有行为，非乱码缺陷）。
-5. **macOS 本地网络隐私（TCC）**：sshd 无 Full Disk Access 不可读 TCC.db，以实测可达性代替；全新 Mac 若复现阻塞需在「隐私与安全性→本地网络」手动授权。
-6. **Mac claude 直连依赖**：依赖 qwen 上游可达与密钥有效（密钥取自本机 magpie `providers.json`，**不入库**）；上游策略/密钥变更需同步 Mac `~/.claude/settings.json`。
-7. **deepseek 仅 Windows 实测**：macOS/WSL 的 deepseek 适配器未跨机实测。
-8. **echo/shell 临时文件方案假设**：依赖系统 Temp 路径无空格（当前 Administrator 满足）；含空格路径需改用短路径或引号安全方案。
+4. **macOS 本地网络隐私（TCC）**：sshd 无 Full Disk Access 不可读 TCC.db，以实测可达性代替；全新 Mac 若复现阻塞需在「隐私与安全性→本地网络」手动授权。
+5. **Mac claude 直连依赖**：依赖 qwen 上游可达与密钥有效（密钥取自本机 magpie `providers.json`，**不入库**）；上游策略/密钥变更需同步 Mac `~/.claude/settings.json`。
+6. **deepseek 仅 Windows 实测**：macOS/WSL 的 deepseek 适配器未跨机实测。
+7. **Windows 含空格 Temp 路径未实机复测**：命令构造、单元测试和交叉编译已通过，仍需在 Temp 路径含空格的 Windows 环境做一次 echo/shell 端到端确认。
 
 ## 四、关键配置变更（本机，不入库）
 
