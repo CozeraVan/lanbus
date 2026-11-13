@@ -101,7 +101,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Added
 - **Initial Go worker (Phase 1)**: `go/cmd/lanbus-worker` + `go/internal/worker`, speaking the existing hub protocol. register/claim/progress/log/submit/heartbeat/recover/outbox, streamed logs, prompt composition, git diff/status, inline base64 artifacts.
 - **Native cancellation**: Windows process-tree kill via `taskkill /T`; Unix process-group SIGTERM/SIGKILL. `lan_interrupt` works while the window is unfocused/backgrounded.
-- **Go worker adapters**: claude, codex, kimi, deepseek, shell, echo, custom `--cmd` with `{prompt_file}` substitution or stdin delivery.
+- **Go worker adapters**: claude, codex, kimi, deepseek, shell, echo, custom `--cmd` with `{prompt_file}`.
 - **Cross-built worker binaries**: Windows amd64, macOS arm64/amd64, Linux amd64.
 - **Go tests** for the worker artifact glob matcher and scanner.
 - **CI** builds/tests the Go scanner and worker.
@@ -144,7 +144,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - **MCP tools**: `lan_discover` (local or `env`-remote via `kind=discover`) and `lan_ask` (prompt a discovered Ollama/OpenAI-compatible endpoint without installing anything there; `env` runs from that worker's network).
 - **CLI**: `lanbus discover [--cidr] [--ports] [--deep] [--json] [--watch]`, `lanbus ask --endpoint ... --prompt ...`.
 - **Worker capability `discover`**: discovery runs inside a worker and uploads the full `discovery.json` artifact; `required_caps` prevents old workers from claiming it.
-- **Per-worker tokens** (`--worker-tokens` / `LANBUS_WORKER_TOKEN`) and worker-restart `previous_task` force recovery.
+- **Per-worker tokens** (`--worker-tokens` / `--worker-tokens-file`) and worker-restart `previous_task` force recovery.
 - **Tests**: 6 discovery tests (fake Ollama/OpenAI/MCP/lanbus services, MCP scan, direct ask, remote worker scan).
 
 ### Changed
