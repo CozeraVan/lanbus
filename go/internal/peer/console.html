@@ -82,16 +82,20 @@ main{padding:18px 22px;display:flex;flex-direction:column;max-width:1000px}
 <div id="toast" class="toast"></div>
 <script>
 const $=s=>document.querySelector(s);
+// API base is empty when served standalone by the peer; the desktop window's
+// consoleproxy injects window.__LANBUS_BASE__="/console/<name>" and adds the
+// approval secret server-side, so the embedded page needs no URL fragment.
+const API_BASE=window.__LANBUS_BASE__||'';
 const state={controller:null, targets:{}, active:null};
 // Secret arrives via URL fragment, never sent to the server except as a header.
 (function(){const m=location.hash.match(/secret=([^&]+)/);if(m){sessionStorage.setItem('lanbus_console',decodeURIComponent(m[1]));history.replaceState(null,'',location.pathname)}})();
 function secret(){return sessionStorage.getItem('lanbus_console')||''}
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),4000)}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function api(path,body){const opt={headers:{'X-Lanbus-Approval':secret(),'Content-Type':'application/json'}};if(body!==undefined){opt.method='POST';opt.body=JSON.stringify(body)}const r=await fetch(path,opt);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||(r.status+' '+r.statusText));return j}
+async function api(path,body){const opt={headers:{'X-Lanbus-Approval':secret(),'Content-Type':'application/json'}};if(body!==undefined){opt.method='POST';opt.body=JSON.stringify(body)}const r=await fetch(API_BASE+path,opt);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||(r.status+' '+r.statusText));return j}
 function setStep(n){for(let i=1;i<=5;i++)$('#step'+i).classList.toggle('active',i<=n)}
 
-async function loadHealth(){try{const j=await (await fetch('/peer/health')).json();$('#health').textContent=(j.display_name||j.name||'peer')+' · '+(j.request_policy||'');$('#who').textContent=j.agent||''}catch(e){$('#health').textContent='离线'}}
+async function loadHealth(){try{const j=await (await fetch(API_BASE+'/peer/health')).json();$('#health').textContent=(j.display_name||j.name||'peer')+' · '+(j.request_policy||'');$('#who').textContent=j.agent||''}catch(e){$('#health').textContent='离线'}}
 
 async function loadLocals(){try{const j=await api('/peer/console/locals');window._locals=j.locals||[];const sel=$('#controller');const prev=sel.value;sel.innerHTML='';(j.locals||[]).forEach(l=>{const o=document.createElement('option');o.value=l.name;o.textContent=(l.display_name||l.name)+(l.online?'':'（离线）')+(l.agent?' · '+l.agent:'');o.disabled=!l.online;sel.appendChild(o)});if(prev&&[...sel.options].some(o=>o.value===prev))sel.value=prev;onController();
   // local peers are also candidate targets
@@ -145,7 +149,7 @@ async function sendMsg(){const t=state.targets[state.active];if(!t){toast('请�
   finally{$('#sendBtn').disabled=false;$('#busy').textContent='';renderDialog()}}
 
 $('#msg').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();sendMsg()}});
-(async function init(){await loadHealth();if(!secret()){$('#scanInfo').innerHTML='<span class="err">缺少审批密钥：请通过 lanbus console 或托盘打开（URL 片段自动带入）。</span>';return}await loadLocals();setStep(1)})();
+(async function init(){await loadHealth();if(!secret()&&!API_BASE){$('#scanInfo').innerHTML='<span class="err">缺少审批密钥：请通过 lanbus console 或托盘打开（URL 片段自动带入）。</span>';return}await loadLocals();setStep(1)})();
 </script>
 </body>
 </html>

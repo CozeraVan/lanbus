@@ -24,6 +24,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"github.com/CozeraVan/lanbus/go/internal/consoleproxy"
 	"github.com/CozeraVan/lanbus/go/internal/hub"
 	"github.com/CozeraVan/lanbus/go/internal/peerui"
 )
@@ -47,20 +48,31 @@ func peerUIEntries(home string) []peerEntry {
 }
 
 type proxyHandler struct {
-	proxy *httputil.ReverseProxy
-	html  []byte
-	token string
+	proxy   *httputil.ReverseProxy
+	html    []byte
+	token   string
+	console *consoleproxy.Handler
 }
 
+// navigateListener lets the tray switch the window to a peer console in-place.
+// It polls until the Wails runtime is ready, then listens for navigation events.
+const navigateListener = "<script>(function(){function reg(){if(window.runtime&&runtime.EventsOn){runtime.EventsOn('lanbus-navigate',function(u){location.href=u})}else{setTimeout(reg,50)}}reg();})();</script>"
+
 func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/console") {
+		h.console.ServeHTTP(w, r)
+		return
+	}
 	if r.URL.Path == "/" || r.URL.Path == "/ui" || r.URL.Path == "/ui/" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		page := string(h.html)
+		var inject strings.Builder
 		if h.token != "" {
-			inject := "<script>localStorage.setItem('lanbus_token'," + fmt.Sprintf("%q", h.token) + ");</script>"
-			page = strings.Replace(page, "</head>", inject+"</head>", 1)
+			inject.WriteString("<script>localStorage.setItem('lanbus_token'," + fmt.Sprintf("%q", h.token) + ");</script>")
 		}
+		inject.WriteString(navigateListener)
+		page = strings.Replace(page, "</head>", inject.String()+"</head>", 1)
 		_, _ = w.Write([]byte(page))
 		return
 	}
@@ -137,13 +149,15 @@ func main() {
 				}(p.url, item.ClickedCh)
 			}
 			for _, p := range peers {
-				consoleURL := strings.Replace(p.url, "/peer/ui#", "/peer/console#", 1)
-				item := systray.AddMenuItem("指挥台: "+p.name, "打开直连指挥台")
-				go func(url string, ch <-chan struct{}) {
+				item := systray.AddMenuItem("指挥台: "+p.name, "在窗口内打开直连指挥台")
+				go func(name string, ch <-chan struct{}) {
 					for range ch {
-						_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+						a.show()
+						if a.ctx != nil {
+							runtime.EventsEmit(a.ctx, "lanbus-navigate", "/console/"+name)
+						}
 					}
-				}(consoleURL, item.ClickedCh)
+				}(p.name, item.ClickedCh)
 			}
 		}
 		systray.AddSeparator()
@@ -166,7 +180,8 @@ func main() {
 	// Wait briefly for the hub to come up; the UI itself handles errors.
 	time.Sleep(100 * time.Millisecond)
 
-	handler := &proxyHandler{proxy: proxy, html: []byte(hub.UIHTML()), token: token}
+	home, _ := os.UserHomeDir()
+	handler := &proxyHandler{proxy: proxy, html: []byte(hub.UIHTML()), token: token, console: &consoleproxy.Handler{Home: home}}
 	err := wails.Run(&options.App{
 		Title:       "lanbus · local agent bus",
 		Width:       width,
