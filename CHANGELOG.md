@@ -125,7 +125,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ## [1.2.1] - 2026-11-04
 
 ### Added
-- **`lan_interrupt`** MCP tool + `lanbus interrupt` CLI: explicit Ctrl+C-equivalent for lanbus tasks. It uses the worker cancellation path and kills the whole process tree (`taskkill /T` on Windows, process group on POSIX). A late `/worker/submit` is rejected, so a cancelled task cannot be resurrected as `submitted`/`failed`.
+- **`lan_interrupt`** MCP tool + `lanbus interrupt` CLI: explicit Ctrl+C-equivalent for lanbus tasks. It uses the worker cancellation path and kills the whole process tree, independent of window focus/background state.
 - **Kimi worker adapter**: `--agent kimi` uses `lanbus.prompt_cli` to pass the prompt file as one argv to `kimi -p`, avoiding shell quoting and newline issues on Windows/macOS.
 - **DeepSeek worker adapter**: `--agent deepseek` uses `dsh headless -` over stdin.
 - **macOS worker templates**: `examples/macos/com.lanbus.worker.plist`, `com.lanbus.worker-go.plist`, and `start-worker.sh`.
