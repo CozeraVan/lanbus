@@ -15,10 +15,10 @@ Zero mandatory dependencies. Standard library only. Never leaves your LAN. Optio
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-modes-dark.png">
-  <img alt="lanbus two modes: a symmetric encrypted peer mesh (direct company network) and a hub-and-spoke orchestration loop with evidence-based review" src="docs/images/architecture-modes-light.png">
+  <img alt="lanbus as a company: Mode A equal colleagues querying and helping each other over encrypted links; Mode B a manager dispatching tasks to employee agents who submit evidence for review" src="docs/images/architecture-modes-light.png">
 </picture>
 
-*The two modes at a glance: the default direct company network is a symmetric, encrypted peer mesh with no hub; hub mode is a central queue where workers pull tasks and results are accepted or sent back for rework based on real evidence (exit code, git diff, artifacts).*
+*Think of lanbus as a company and each agent as an employee. **Mode A — colleagues (direct company network):** everyone is equal; any colleague can query information or ask help from any other over encrypted links. **Mode B — manager (hub mode):** the main agent is the manager who dispatches tasks; employee agents pull and complete them, then submit evidence (exit code, git diff, artifacts) for the manager to approve or send back for rework.*
 
 ```
 Direct company network (no hub)          Hub mode (task orchestration)

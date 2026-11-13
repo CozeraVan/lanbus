@@ -15,10 +15,10 @@ lanbus 现在有两种互补模式：
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-modes-dark.png">
-  <img alt="lanbus 两种模式：直连公司成员网络（对称加密 peer 网状）与 Hub 编排（星型派单 + 证据验收回路）的 agent 关系与信息流" src="docs/images/architecture-modes-light.png">
+  <img alt="lanbus 公司比喻：A 模式平等同事互相加密查询求助；B 模式经理向员工 agent 派单，员工提交证据由经理审核" src="docs/images/architecture-modes-light.png">
 </picture>
 
-*两种模式一览：默认的直连公司成员网络是无中心、对称加密的 peer 网状网；Hub 模式是中心队列派单，worker 主动拉取，按真实证据（退出码、git diff、产物）决定通过或打回重做。*
+*把 lanbus 看成一家公司，每个 agent 是一名员工。**A · 同事协作（直连公司成员网络）**：人人平等，任何同事都能向其他同事加密查询信息、请求帮助。**B · 经理派单（Hub 模式）**：主 agent 是经理，负责派单；员工 agent 领取并完成任务，提交证据（退出码、git diff、产物）由经理审核，通过或打回重做。*
 
 ```
 直连公司成员网络（无 Hub）              Hub 模式（任务编排）
