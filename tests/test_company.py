@@ -18,8 +18,12 @@ def test_company_join_once_then_free_member_chat(tmp_path):
     a_client = peer.DirectClient(b.url, str(tmp_path / "a"))
     try:
         result = {}
+        errors = []
         def join():
-            result["company"] = a_client.join_company("申请加入", status_timeout=5)
+            try:
+                result["company"] = a_client.join_company("申请加入", status_timeout=5)
+            except Exception as exc:
+                errors.append(exc)
         thread = threading.Thread(target=join)
         thread.start()
         deadline = time.time() + 5
@@ -34,6 +38,10 @@ def test_company_join_once_then_free_member_chat(tmp_path):
                            b.approval_secret)
         thread.join(timeout=6)
         assert not thread.is_alive()
+        if errors:
+            raise AssertionError(
+                f"join 线程异常: {errors[0]!r}; pending={list(b.pending)} "
+                f"completed={b.completed}") from errors[0]
         company = result["company"]
         assert company["company_name"] == "测试公司"
         assert company["secret"] not in str(peer.json_request(b.url + "/peer/health"))
