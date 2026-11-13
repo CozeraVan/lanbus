@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/CozeraVan/lanbus/go/internal/version"
 	"github.com/CozeraVan/lanbus/go/internal/worker"
 )
 
@@ -38,7 +39,7 @@ func main() {
 		"override agent --permission-mode (e.g. bypassPermissions on trusted LAN)")
 	flag.Parse()
 	if cfg.Version {
-		fmt.Println("lanbus-worker-go 1.9.0")
+		fmt.Println("lanbus-worker-go " + version.String())
 		return
 	}
 	if cfg.Direct {

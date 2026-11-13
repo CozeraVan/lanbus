@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/CozeraVan/lanbus/go/internal/scanner"
+	productversion "github.com/CozeraVan/lanbus/go/internal/version"
 )
 
 func main() {
@@ -17,7 +18,7 @@ func main() {
 	version := flag.Bool("version", false, "print version")
 	flag.Parse()
 	if *version {
-		fmt.Println("lanbus-scan 0.1.0")
+		fmt.Println("lanbus-scan " + productversion.String())
 		return
 	}
 	var spec map[string]any
