@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **GUI command console (指挥台)** for the direct company network: a loopback dialog that discovers local/LAN agents, picks a controller and one or more targets, sends a confirmation request, and chats once a human on the target machine approves. Open with `lanbus console --name NAME` or the desktop tray's "指挥台" entry.
+- **Multi-turn conversation context**: the controller stores per-target history and prepends it to each request, so a freshly spawned target agent keeps continuity with no protocol or target-side change (works with any agent).
+- **Console embedded in the desktop window**: the Wails shell serves the console through a loopback reverse proxy (`/console/<name>`) with server-side approval-secret injection and in-window tray navigation, so the page never handles the secret.
+- **Per-target context controls**: a "carry context" toggle and turn limit, persisted per conversation and restored on reload, plus a "clear conversation" reset.
+- **Console UX polish**: per-message copy button and long-reply collapse/expand.
+
 ## [1.9.2] - 2026-11-13
 
 ### Fixed

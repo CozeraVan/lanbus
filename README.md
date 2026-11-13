@@ -261,6 +261,24 @@ make package        # portable Windows zip under dist/
 The portable package and optional Inno Setup installer are under `packaging/windows/`.
 Signing (`sign.ps1`) and a SHA-256 update helper (`update.ps1`) are included.
 
+### Command console (指挥台)
+
+A loopback dialog for the direct company network: discover local/LAN agents, pick
+a controller and one or more targets, send a confirmation request, and chat once a
+human on the target machine approves.
+
+```bash
+lanbus console --name mac-agent     # open the console for a local direct node
+```
+
+The conversation is multi-turn: the controller keeps per-target history and
+prepends it to each request, so a freshly spawned target agent stays in context
+(no protocol or target-side change — works with any agent). A "carry context"
+toggle and turn limit are remembered per conversation; long replies collapse with
+expand/copy controls. The desktop tray's "指挥台" entry opens the same console
+inside the Wails window through a loopback proxy (`/console/<name>`), so the
+approval secret is injected server-side and never exposed to the page.
+
 ### Persistent local workers
 
 ```bash
