@@ -52,6 +52,16 @@ func ApprovalURL(dataDir string) (string, error) {
 	return baseURL + "/peer/ui#secret=" + url.QueryEscape(sec.Secret), nil
 }
 
+// ConsoleURL returns the loopback command-console URL with the approval secret
+// in its fragment. Like ApprovalURL it must never be written to logs.
+func ConsoleURL(dataDir string) (string, error) {
+	u, err := ApprovalURL(dataDir)
+	if err != nil {
+		return "", err
+	}
+	return strings.Replace(u, "/peer/ui#", "/peer/console#", 1), nil
+}
+
 // Entries returns valid peers under <home>/.lanbus/peers, skipping incomplete,
 // stale or unsafe metadata. Invalid entries must not prevent other peers opening.
 func Entries(home string) []Entry {

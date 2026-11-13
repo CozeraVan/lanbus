@@ -136,6 +136,15 @@ func main() {
 					}
 				}(p.url, item.ClickedCh)
 			}
+			for _, p := range peers {
+				consoleURL := strings.Replace(p.url, "/peer/ui#", "/peer/console#", 1)
+				item := systray.AddMenuItem("指挥台: "+p.name, "打开直连指挥台")
+				go func(url string, ch <-chan struct{}) {
+					for range ch {
+						_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+					}
+				}(consoleURL, item.ClickedCh)
+			}
 		}
 		systray.AddSeparator()
 		quit := systray.AddMenuItem("退出", "关闭 lanbus")
