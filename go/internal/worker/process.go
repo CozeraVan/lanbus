@@ -25,7 +25,8 @@ func runStreaming(name string, args []string, shellCmd, cwd, stdin string, cance
 	var cmd *exec.Cmd
 	if shellCmd != "" {
 		if isWindows() {
-			cmd = exec.Command("cmd.exe", "/C", shellCmd)
+			cmd = exec.Command("cmd.exe")
+			setShellCmdLine(cmd, shellCmd)
 		} else {
 			cmd = exec.Command("sh", "-c", shellCmd)
 		}

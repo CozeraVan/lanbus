@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// setShellCmdLine is a no-op on Unix: `sh -c` receives the shell string as a
+// single argument with correct escaping, so no raw command line is needed.
+func setShellCmdLine(cmd *exec.Cmd, shellCmd string) {}
+
 func startProcess(cmd *exec.Cmd) (*proc, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {

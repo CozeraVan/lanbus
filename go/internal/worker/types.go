@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/CozeraVan/lanbus/go/internal/version"
 )
 
 type Config struct {
@@ -121,7 +123,7 @@ func New(cfg Config) (*Worker, error) {
 	}
 	w := &Worker{
 		cfg:         cfg,
-		version:     "1.9.0-go",
+		version:     version.String() + "-go",
 		httpClient:  &http.Client{Transport: tr, Timeout: 190 * time.Second},
 		cancelIDs:   map[string]bool{},
 		outboxDir:   cfg.Outbox,
