@@ -104,32 +104,59 @@ and task result. The Go hub is now the **default** on port 8788; the Python hub
 remains available as a fallback (`lanbus hub` / `start-hub-python.cmd`) for
 browser-task and legacy compatibility.
 
-### Zero-config direct agent peering (Python Worker)
+### Symmetric agent company network (no hub or token)
 
-Start a direct worker on the target machine. No hub or token is needed:
+Direct nodes have no host/worker hierarchy: every node can discover, ask, receive messages, and delegate. `lanbus agent` is the symmetric entry point; `lanbus worker --direct` remains compatible. Display and instance labels distinguish multiple agents/windows on one machine:
 
 ```bash
-lanbus worker --name mac-agent --env macos --direct --cwd ~/project --agent claude
+# Create a company on any node, or join through an existing member instead.
+lanbus company create --name mac-agent --company-name "My team"
+lanbus agent --name mac-agent --env macos --direct --cwd ~/project --agent claude \
+  --display-name "Backend Claude" --instance-label backend
+# Add --no-open-approval to keep notifications without opening the approval page.
 ```
 
-Chat or submit a project task from another machine:
+Another machine applies through **any existing member**. The request appears only on that member's machine, where a person selects **Approve join** once:
+
+```bash
+lanbus company join --to mac-agent --name a-agent
+# A third node may now join through a-agent rather than the creator.
+lanbus company join --to a-agent --name c-agent
+```
+
+Members can then communicate in either direction without pairwise setup or per-request approval:
 
 ```bash
 lanbus chat --to mac-agent --message "Introduce your environment and propose a collaboration plan"
 lanbus run --to 192.168.1.236:8790 --cwd /Users/me/project --message "Inspect the project and run tests"
+lanbus company show --name a-agent
+lanbus company leave --name a-agent
 ```
 
-The first request waits while the target terminal shows its request ID. On the target machine, the local user runs:
+Give the local agent MCP access to the same identity. `LANBUS_PEER_DIR` must point to that node's data directory; **never put the company secret in MCP configuration**:
 
-```bash
-lanbus inbox --name mac-agent
-lanbus allow REQUEST_ID --name mac-agent --pair --scope chat
-# Or this session only: lanbus allow REQUEST_ID --name mac-agent --session --scope project --cwd ~/project
+```json
+{
+  "mcpServers": {
+    "lanbus": {
+      "command": "lanbus-mcp",
+      "env": {"LANBUS_PEER_DIR": "/Users/me/.lanbus/peers/a-agent"}
+    }
+  }
+}
 ```
 
-The waiting request continues automatically after approval. Persistent pairs need no repeated approval; session grants expire after 30 idle minutes or a target restart. Revoke locally with `lanbus revoke PEER_ID --name mac-agent`. Discovery includes direct ports `8790` and `8791`; an explicit IP:port also works.
+The six tools are `lanbus_agent_discover`, `lanbus_agent_send`, `lanbus_agent_delegate`, `lanbus_agent_result`, `lanbus_company_list`, and `lanbus_company_join`. MCP is the local agent entry point, not a central server; the first join still requires human approval on an existing member.
 
-Direct peering uses Ed25519 identities, X25519 key agreement, and AES-GCM encryption. On POSIX, private files use `0700` directories, `0600` files, and atomic writes. Approval, denial, and revocation accept only loopback requests on the target. Project tasks are confined to approved working directories, but the underlying agent CLI is not a complete OS sandbox; inspect the source and request before approving.
+Policies:
+
+- `company` (default): free member communication. Non-members still need human pairing and cannot bypass approval through the company path.
+- `each`: strict mode; every chat/task identifies source and target and requires **Approve once**, or `lanbus allow REQUEST_ID --name mac-agent`.
+- `pair`: legacy persistent pairing. A non-member can be approved with `lanbus allow REQUEST_ID --name mac-agent --pair --scope chat`, or `--session --scope project --cwd ~/project` for one session. Sessions expire after 30 idle minutes or a target restart.
+
+For same-name agents, use a unique instance label: `lanbus chat --to backend --message "..."`. Ambiguity errors list the host, agent, instance, cwd and endpoint instead of silently selecting the first candidate. Discovery includes direct ports `8790` and `8791`; an explicit IP:port also works. Revoke a source locally with `lanbus revoke PEER_ID --name mac-agent`.
+
+Direct peering uses Ed25519 identities, X25519 key agreement, and AES-GCM encryption; company credentials are delivered through the encrypted join channel. On POSIX, private files use `0700` directories, `0600` files, and atomic writes. Approval, denial, and revocation accept only loopback requests on the target. Project tasks are confined to approved working directories, but the underlying agent CLI is not a complete OS sandbox; inspect the source and request before approving. **All members share the company secret: compromise of one member may compromise the whole company, and leaving does not revoke grants already stored by other nodes.**
 
 ### Hub mode (existing deployments)
 
@@ -497,7 +524,7 @@ After it connects, `lan_envs` shows `mac-a-cli` with the adapter capability, and
 
 ```bash
 pip install -e ".[dev]"
-pytest -v                     # 91 tests: protocol, dispatch/rework, logs, cancel/interrupt, lease recovery, artifacts, roles, discovery, chat, web UI, local supervisor, Go hub tools/dual-run, remote confirmation, direct peering, release assets
+pytest -v                     # 107 tests: protocol, dispatch/rework, logs, cancel/interrupt, lease recovery, artifacts, roles, discovery, chat, web UI, local supervisor, Go hub tools/dual-run, remote confirmation, direct peering, company network, MCP server, notifications, per-request approval, release assets
 make go-test                  # Go scanner + worker + hub + backup + daemon tests
 make go-scan                  # native bin/lanbus-scan; Python auto-detects it
 make go-worker                # native bin/lanbus-worker

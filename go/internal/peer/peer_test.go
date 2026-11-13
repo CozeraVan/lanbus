@@ -220,7 +220,7 @@ func testServer(t *testing.T, executor ExecutorFunc) (*Server, string) {
 	dir := t.TempDir()
 	s, err := NewServer(ServerConfig{
 		Name: "go-test", Agent: "echo", CWD: dir, DataDir: filepath.Join(dir, "peer"),
-		Host: "127.0.0.1", Port: 0, Executor: executor,
+		Host: "127.0.0.1", Port: 0, Executor: executor, RequestPolicy: "pair",
 	})
 	if err != nil {
 		t.Fatal(err)

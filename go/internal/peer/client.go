@@ -77,8 +77,17 @@ func (c *Client) DropGrant(targetPeerID string) {
 	atomicJSON(c.credentialsPath, saved, true)
 }
 
-// Request sends one encrypted direct request under an approved grant.
+// Request sends one legacy encrypted direct request under an approved grant.
 func (c *Client) Request(grant map[string]any, message, scope, cwd string, timeout float64) (map[string]any, error) {
+	return c.request(grant, message, scope, cwd, timeout, 0, false)
+}
+
+// RequestV2 uses per-request approval when the target advertises request_v2.
+func (c *Client) RequestV2(grant map[string]any, message, scope, cwd string, timeout, statusTimeout float64) (map[string]any, error) {
+	return c.request(grant, message, scope, cwd, timeout, statusTimeout, true)
+}
+
+func (c *Client) request(grant map[string]any, message, scope, cwd string, timeout, statusTimeout float64, negotiate bool) (map[string]any, error) {
 	signPublic := asString(grant["target_sign_public"])
 	pubRaw, err := unb64(signPublic)
 	if err != nil || sha256Sum(pubRaw)[:32] != asString(grant["target_peer_id"]) ||
@@ -98,17 +107,64 @@ func (c *Client) Request(grant map[string]any, message, scope, cwd string, timeo
 	if err != nil {
 		return nil, err
 	}
-	response, err := JSONRequest(c.URL+"/peer/request", map[string]any{
+	body := map[string]any{
 		"grant_id": asString(grant["grant_id"]), "request_id": requestID, "packet": packet,
-	}, nil, timeout+30)
-	if err != nil {
-		return nil, err
 	}
-	respPacket, _ := response["packet"].(map[string]any)
-	if respPacket == nil {
-		respPacket = map[string]any{}
+	if negotiate {
+		health, err := JSONRequest(c.URL+"/peer/health", nil, nil, 10)
+		if err != nil {
+			return nil, err
+		}
+		if asString(health["request_policy"]) == "each" {
+			if features, ok := health["approval_features"].([]any); ok {
+				for _, feature := range features {
+					if asString(feature) == "request_v2" {
+						body["request_version"] = PyFloat(2)
+					}
+				}
+			}
+		}
 	}
-	return DecryptPacket(key, respPacket, aad)
+	if statusTimeout <= 0 {
+		statusTimeout = 600
+	}
+	deadline := time.Now().Add(time.Duration(statusTimeout * float64(time.Second)))
+	waiting := false
+	for {
+		response, _, err := jsonRequestStatus(c.URL+"/peer/request", body, nil, timeout+30)
+		if err != nil {
+			return nil, err
+		}
+		status := asString(response["status"])
+		if status == "approval_required" {
+			if !waiting {
+				fmt.Printf("等待目标机器批准本次请求：%s\n", requestID)
+				waiting = true
+			}
+			state, err := PairingStatus(c.URL, requestID, c.Identity.PeerID)
+			if err != nil {
+				return nil, err
+			}
+			switch asString(state["status"]) {
+			case "denied":
+				return nil, fmt.Errorf("目标机器已拒绝本次执行")
+			case "expired":
+				return nil, fmt.Errorf("目标机器的本次执行审批已过期")
+			case "failed":
+				return nil, fmt.Errorf("目标机器执行失败")
+			}
+		} else if status != "execution_running" {
+			respPacket, _ := response["packet"].(map[string]any)
+			if respPacket == nil {
+				return nil, fmt.Errorf("目标返回了无法识别的直连响应")
+			}
+			return DecryptPacket(key, respPacket, aad)
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("等待目标机器批准或执行本次请求超时")
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 }
 
 // RequestPairing mirrors peer.request_pairing.
@@ -141,19 +197,24 @@ func PairingStatus(url, requestID, peerID string) (map[string]any, error) {
 // JSONRequest posts canonical JSON (or GET when payload nil); non-2xx answers
 // become errors carrying the server's "error" text, like Python json_request.
 func JSONRequest(url string, payload map[string]any, headers map[string]string, timeout float64) (map[string]any, error) {
+	response, _, err := jsonRequestStatus(url, payload, headers, timeout)
+	return response, err
+}
+
+func jsonRequestStatus(url string, payload map[string]any, headers map[string]string, timeout float64) (map[string]any, int, error) {
 	var body io.Reader
 	method := "GET"
 	if payload != nil {
 		raw, err := Canonical(payload)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		body = bytes.NewReader(raw)
 		method = "POST"
 	}
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
@@ -162,7 +223,7 @@ func JSONRequest(url string, payload map[string]any, headers map[string]string, 
 	client := &http.Client{Timeout: time.Duration(timeout * float64(time.Second))}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
@@ -175,12 +236,13 @@ func JSONRequest(url string, payload map[string]any, headers map[string]string, 
 		if msg == "" {
 			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
-		return nil, fmt.Errorf("%s", msg)
+		return nil, resp.StatusCode, fmt.Errorf("%s", msg)
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return map[string]any{}, nil
+		return map[string]any{}, resp.StatusCode, nil
 	}
-	return ParseObject(raw)
+	value, err := ParseObject(raw)
+	return value, resp.StatusCode, err
 }
 
 var _ = json.Number("")

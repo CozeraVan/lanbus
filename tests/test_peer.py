@@ -68,7 +68,7 @@ def test_aes_gcm_round_trip_and_tamper_rejection():
 
 
 def running_server(tmp_path, **kwargs):
-    options = {"command": "unused"}
+    options = {"command": "unused", "request_policy": "pair"}
     options.update(kwargs)
     server = peer.PeerServer(name="target-agent", agent="fake", cwd=str(tmp_path),
                              data_dir=str(tmp_path / "target"),
@@ -327,6 +327,7 @@ def test_zero_config_cross_process_chat_with_local_consent(tmp_path):
         sys.executable, "-m", "lanbus", "worker", "--name", "os-target",
         "--env", "os-target", "--direct", "--direct-port", str(port),
         "--direct-data-dir", str(target_data), "--agent", "shell",
+        "--request-policy", "pair",
         "--cmd", f'{sys.executable} "{fake}" "{{prompt_file}}"',
         "--cwd", str(tmp_path)], env=target_env, stdout=target_log,
         stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")

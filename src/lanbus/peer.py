@@ -222,7 +222,7 @@ def local_request(port, path, payload, secret):
                         {"X-Lanbus-Approval": secret}, timeout=30)
 
 
-def request_pairing(url, identity, message, scope, cwd):
+def request_pairing(url, identity, message, scope, cwd, company=None, join_company=False):
     payload = {
         "source": {"peer_id": identity.peer_id, "hostname": socket.gethostname(),
                    "agent": "lanbus-cli", "sign_public": identity.sign_public_b64,
@@ -231,8 +231,19 @@ def request_pairing(url, identity, message, scope, cwd):
         "created_at": time.time(), "expires_at": time.time() + PENDING_TTL_S,
         "nonce": _b64(os.urandom(24)),
     }
+    if company:
+        from .company import company_proof
+        payload["company_id"] = company["company_id"]
+        payload["company_proof"] = company_proof(company["secret"], company["company_id"],
+                                                 identity.peer_id, payload["nonce"])
+    if join_company:
+        payload["join_company"] = True
     payload["signature"] = identity.sign(payload)
     return json_request(url.rstrip("/") + "/peer/pair", payload)
+
+
+def request_company(url, identity, company, message, scope, cwd):
+    return request_pairing(url, identity, message, scope, cwd, company=company)
 
 
 def pairing_status(url, request_id, peer_id):
@@ -256,17 +267,27 @@ def _primary_lan_ip():
 
 class PeerServer:
     def __init__(self, name, agent, cwd, command, data_dir, host="0.0.0.0", port=8790,
-                 executor=None):
+                 executor=None, display_name="", instance_label="", request_policy="company", notifier=None):
         self.name = name
         self.agent = agent
+        self.display_name = display_name or name
+        self.instance_label = instance_label
+        self.request_policy = request_policy if request_policy in ("each", "pair", "company") else "company"
+        self.notifier = notifier
         self.cwd = os.path.realpath(cwd or os.getcwd())
         self.command = command
         self.executor = executor
         self.data_dir = os.path.abspath(data_dir)
+        from .company import CompanyStore
+        self.company_store = CompanyStore(self.data_dir)
+        self.company = self.company_store.load()
         self.identity = Identity.load(self.data_dir)
         self.grants = GrantStore(self.data_dir)
         self.pending = {}
         self.completed = {}
+        self.execution_pending = {}
+        self.execution_completed = {}
+        self.execution_running = {}
         self.seen_requests = set()
         self.pair_nonces = set()
         self.rate = {}
@@ -301,8 +322,24 @@ class PeerServer:
     def _public_peer(self, host_header=None):
         return {"name": self.name, "agent": self.agent, "hostname": socket.gethostname(),
                 "peer_id": self.identity.peer_id, "direct_pairing": True,
+                "display_name": self.display_name, "instance_label": self.instance_label,
+                "cwd_display": self.cwd, "request_policy": self.request_policy,
+                "approval_features": (["request_v2"] if self.request_policy == "each" else []) +
+                                     (["company_v1"] if self.company else []),
+                "company_id": (self.company or {}).get("company_id") or "",
+                "company_name": (self.company or {}).get("company_name") or "",
                 "endpoint": self._advertised_endpoint(host_header),
                 "scopes": ["chat", "project"]}
+
+    def _notify(self, request_id, kind, message):
+        if not self.notifier:
+            return
+        try:
+            self.notifier({"request_id": request_id, "kind": kind, "message": message,
+                           "url": self.url + "/peer/ui", "secret": self.approval_secret,
+                           "target": self._public_peer()})
+        except Exception as exc:
+            print(f"[peer:{self.name}] 通知失败：{exc}", flush=True)
 
     def _advertised_endpoint(self, host_header=None):
         # 绑定通配地址时通告 LAN 可达端点：优先调用方实际使用的 Host，
@@ -330,6 +367,30 @@ class PeerServer:
                 self.completed[request_id] = {"status": "expired",
                                                "peer_id": self.pending[request_id]["source"]["peer_id"]}
                 del self.pending[request_id]
+        for request_id in list(self.execution_pending):
+            item = self.execution_pending[request_id]
+            if float(item.get("expires_at") or 0) < cutoff:
+                self.execution_completed[request_id] = dict(item, status="expired")
+                del self.execution_pending[request_id]
+
+    def _make_grant(self, pending, mode, scope, cwd):
+        source = pending["source"]
+        grant = {
+            "grant_id": uuid.uuid4().hex, "peer_id": source["peer_id"],
+            "target_peer_id": self.identity.peer_id, "mode": mode, "scope": scope,
+            "cwds": [cwd] if scope == "project" else [],
+            "sign_public": source["sign_public"], "x_public": source["x_public"],
+            "target_sign_public": self.identity.sign_public_b64,
+            "target_x_public": self.identity.x_public_b64,
+            "source_hostname": source.get("hostname") or "",
+            "source_agent": source.get("agent") or "",
+            "initiator_nonce": pending["nonce"], "target_nonce": _b64(os.urandom(24)),
+            "created_at": time.time(),
+        }
+        grant["target_signature"] = self.identity.sign(
+            {key: value for key, value in grant.items() if key != "target_signature"})
+        self.grants.put_grant(grant)
+        return grant
 
     def _pair(self, payload):
         source = payload.get("source") or {}
@@ -345,6 +406,23 @@ class PeerServer:
         if float(payload.get("expires_at") or 0) < time.time() or float(
                 payload.get("created_at") or 0) > time.time() + 30:
             return 400, {"error": "配对申请已过期"}
+        if payload.get("join_company") and not self.company:
+            return 400, {"error": "目标尚未加入任何公司"}
+        if payload.get("company_id"):
+            if not self.company or payload.get("company_id") != self.company["company_id"]:
+                return 403, {"error": "目标不属于该公司"}
+            import hmac
+            from .company import company_proof
+            expected_proof = company_proof(self.company["secret"], self.company["company_id"],
+                                           source["peer_id"], payload.get("nonce") or "")
+            if not hmac.compare_digest(expected_proof, payload.get("company_proof") or ""):
+                return 403, {"error": "公司成员证明无效"}
+            if self.request_policy == "company":
+                grant = self._make_grant(signed, "company", payload["scope"], self.cwd)
+                return 200, {"status": "approved", "request_id": "company-" + uuid.uuid4().hex[:16],
+                             "grant": grant}
+        if payload.get("join_company"):
+            signed["kind"] = "company"
         with self.lock:
             self._expire()
             nonce = payload.get("nonce")
@@ -369,6 +447,7 @@ class PeerServer:
         print(f"[peer:{self.name}] 待确认 {request_id}: {source.get('hostname')} "
               f"{source.get('agent')} scope={payload['scope']} message={payload['message'][:120]}",
               flush=True)
+        self._notify(request_id, "pairing", payload["message"])
         return 202, {"status": "pending", "request_id": request_id,
                      "target": self._public_peer(), "expires_in": PENDING_TTL_S}
 
@@ -377,14 +456,25 @@ class PeerServer:
         peer_id = query.get("peer_id", [""])[0]
         with self.lock:
             self._expire()
-            if request_id in self.pending:
-                if self.pending[request_id]["source"]["peer_id"] != peer_id:
+            if request_id in self.pending or request_id in self.execution_pending:
+                item = self.pending.get(request_id) or self.execution_pending.get(request_id)
+                if item["source"]["peer_id"] != peer_id:
                     return 200, {"status": "pending"}
                 return 200, {"status": "pending", "request_id": request_id}
+            running = self.execution_running.get(request_id)
+            if running:
+                if running.get("peer_id") != peer_id:
+                    return 404, {"error": "执行申请不存在"}
+                return 200, {"status": "running", "request_id": request_id}
             result = self.completed.get(request_id)
+            if result:
+                if result.get("peer_id") != peer_id:
+                    return 404, {"error": "配对申请不存在"}
+                return 200, result
+            result = self.execution_completed.get(request_id)
             if not result or result.get("peer_id") != peer_id:
-                return 404, {"error": "配对申请不存在"}
-            return 200, result
+                return 404, {"error": "执行申请不存在"}
+            return 200, {"status": result.get("status"), "request_id": request_id}
 
     def _local(self, handler, path, payload):
         if not is_loopback(handler.client_address[0]) or handler.headers.get(
@@ -395,6 +485,8 @@ class PeerServer:
                 self._expire()
                 requests = [dict(item, request_id=request_id)
                             for request_id, item in self.pending.items()]
+                requests += [dict(item, request_id=request_id)
+                             for request_id, item in self.execution_pending.items()]
             return 200, {"requests": requests, "grants": self.grants.list_grants()}
         request_id = (payload or {}).get("request_id", "")
         if path == "/peer/revoke":
@@ -402,6 +494,14 @@ class PeerServer:
             return 200, {"ok": removed}
         with self.lock:
             pending = self.pending.pop(request_id, None)
+            execution = self.execution_pending.pop(request_id, None)
+        if execution:
+            source = execution["source"]
+            status = "denied" if path == "/peer/deny" else "approved" if path == "/peer/approve" else ""
+            if not status:
+                return 404, {"error": "未知审批操作"}
+            self.execution_completed[request_id] = dict(execution, status=status)
+            return 200, {"ok": True, "status": status}
         if not pending:
             return 404, {"error": "配对申请不存在或已处理"}
         source = pending["source"]
@@ -410,31 +510,27 @@ class PeerServer:
             return 200, {"ok": True, "status": "denied"}
         if path != "/peer/approve":
             return 404, {"error": "未知审批操作"}
-        mode = payload.get("mode")
-        scope = payload.get("scope")
-        if mode not in ("pair", "session") or scope not in ("chat", "project"):
+        company_join = pending.get("kind") == "company"
+        mode = "company" if company_join else payload.get("mode")
+        scope = pending.get("scope") if company_join else payload.get("scope")
+        if mode not in ("pair", "session", "company") or scope not in ("chat", "project"):
             return 400, {"error": "请选择 pair/session 和 chat/project"}
         if scope == "project" and pending["scope"] != "project":
             return 400, {"error": "不能把仅交流申请提升为项目任务"}
         cwd = os.path.realpath(payload.get("cwd") or pending.get("cwd") or self.cwd)
         if scope == "project" and not os.path.isdir(cwd):
             return 400, {"error": "授权工作目录不存在"}
-        grant = {
-            "grant_id": uuid.uuid4().hex, "peer_id": source["peer_id"],
-            "target_peer_id": self.identity.peer_id, "mode": mode, "scope": scope,
-            "cwds": [cwd] if scope == "project" else [],
-            "sign_public": source["sign_public"], "x_public": source["x_public"],
-            "target_sign_public": self.identity.sign_public_b64,
-            "target_x_public": self.identity.x_public_b64,
-            "initiator_nonce": pending["nonce"], "target_nonce": _b64(os.urandom(24)),
-            "created_at": time.time(),
-        }
-        grant["target_signature"] = self.identity.sign(
-            {key: value for key, value in grant.items() if key != "target_signature"})
-        self.grants.put_grant(grant)
-        self.completed[request_id] = {"status": "approved", "peer_id": source["peer_id"],
-                                      "grant": grant}
-        return 200, {"ok": True, "status": "approved", "grant": grant}
+        grant = self._make_grant(pending, mode, scope, cwd)
+        completed = {"status": "approved", "peer_id": source["peer_id"], "grant": grant}
+        if company_join:
+            key = self.identity.session_key(grant["x_public"], grant["initiator_nonce"],
+                                            grant["target_nonce"])
+            completed["company_packet"] = encrypt(key, self.company, "company:" + grant["grant_id"])
+        self.completed[request_id] = completed
+        response = {"ok": True, "status": "approved", "grant": grant}
+        if company_join:
+            response["company_packet"] = completed["company_packet"]
+        return 200, response
 
     def _handler(self):
         server = self
@@ -538,8 +634,33 @@ def _peer_direct_request(self, body):
         return 401, {"error": "授权不存在、已过期或已撤销"}
     if not request_id or len(request_id) > 128:
         return 400, {"error": "无效 request_id"}
+    request_v2 = body.get("request_version") == 2 and self.request_policy == "each"
+    digest = hashlib.sha256(canonical(body)).hexdigest()
     with self.lock:
-        if request_id in self.seen_requests:
+        if request_v2:
+            for store in (self.execution_pending, self.execution_running,
+                          self.execution_completed):
+                record = store.get(request_id)
+                if record and record.get("digest") != digest:
+                    return 409, {"error": "相同 request_id 的请求内容已改变"}
+            if request_id in self.execution_pending:
+                return 202, {"status": "approval_required", "request_id": request_id}
+            if request_id in self.execution_running:
+                return 202, {"status": "execution_running", "request_id": request_id}
+            completed = self.execution_completed.get(request_id)
+            if completed:
+                if completed.get("status") == "denied":
+                    return 403, {"error": "目标机器已拒绝本次执行"}
+                if completed.get("status") == "expired":
+                    return 410, {"error": "本次执行审批已过期"}
+                if completed.get("status") == "failed":
+                    return 500, {"error": "直连执行失败：" + str(completed.get("error") or "未知错误")}
+                if completed.get("status") == "completed" and completed.get("packet"):
+                    return 200, {"packet": completed["packet"]}
+                if completed.get("status") == "approved":
+                    self.execution_running[request_id] = completed
+                    del self.execution_completed[request_id]
+        elif request_id in self.seen_requests:
             return 409, {"error": "重复请求已拒绝"}
     try:
         key = self.identity.session_key(grant["x_public"], grant["initiator_nonce"],
@@ -565,15 +686,48 @@ def _peer_direct_request(self, body):
         message = str(payload.get("message") or "").strip()
         if not message or len(message) > 40000:
             return 400, {"error": "消息为空或超过 40000 字符"}
-        with self.lock:
-            if request_id in self.seen_requests:
-                return 409, {"error": "重复请求已拒绝"}
-            self.seen_requests.add(request_id)
+        if request_v2:
+            with self.lock:
+                if request_id not in self.execution_running:
+                    self.execution_pending[request_id] = {
+                        "kind": "execution",
+                        "source": {"peer_id": grant["peer_id"],
+                                   "hostname": grant.get("source_hostname") or "",
+                                   "agent": grant.get("source_agent") or "lanbus-cli"},
+                        "message": message, "scope": scope, "cwd": cwd,
+                        "created_at": time.time(), "expires_at": time.time() + PENDING_TTL_S,
+                        "peer_id": grant["peer_id"], "grant_id": grant_id,
+                        "digest": digest, "payload": payload,
+                    }
+            if request_id in self.execution_pending:
+                print(f"[peer:{self.name}] 待批准执行 {request_id}: {message[:120]}", flush=True)
+                self._notify(request_id, "execution", message)
+                return 202, {"status": "approval_required", "request_id": request_id}
+        else:
+            with self.lock:
+                if request_id in self.seen_requests:
+                    return 409, {"error": "重复请求已拒绝"}
+                self.seen_requests.add(request_id)
         result = self.execute(message, scope, cwd, min(900, float(payload.get("timeout") or 300)))
-        return 200, {"packet": encrypt(key, result, aad)}
+        packet = encrypt(key, result, aad)
+        if request_v2:
+            with self.lock:
+                running = self.execution_running.pop(request_id, {})
+                self.execution_completed[request_id] = dict(
+                    running, status="completed", packet=packet)
+        return 200, {"packet": packet}
     except ValueError as exc:
+        if request_v2:
+            with self.lock:
+                self.execution_running.pop(request_id, None)
         return 400, {"error": str(exc)}
     except Exception as exc:
+        if request_v2:
+            with self.lock:
+                running = self.execution_running.pop(request_id, {})
+                if running:
+                    self.execution_completed[request_id] = dict(
+                        running, status="failed", error=str(exc))
         return 500, {"error": "直连执行失败：" + str(exc)}
 
 
@@ -586,6 +740,7 @@ class DirectClient:
         self.url = url.rstrip("/")
         self.data_dir = data_dir
         self.identity = Identity.load(data_dir)
+        self.last_request_id = None
         self.credentials_path = os.path.join(data_dir, "credentials.json")
 
     def save_grant(self, grant):
@@ -625,7 +780,42 @@ class DirectClient:
         if isinstance(saved, dict) and saved.pop(target_peer_id, None) is not None:
             _atomic_json(self.credentials_path, saved, private=True)
 
-    def request(self, grant, message, scope, cwd="", timeout=300):
+    def join_company(self, message="申请加入公司", scope="project", cwd="", status_timeout=600):
+        pending = request_pairing(self.url, self.identity, message, scope, cwd, join_company=True)
+        request_id = pending["request_id"]
+        deadline = time.monotonic() + status_timeout
+        while time.monotonic() < deadline:
+            result = pairing_status(self.url, request_id, self.identity.peer_id)
+            if result.get("status") == "approved":
+                grant = result["grant"]
+                self.save_grant(grant)
+                key = self.identity.session_key(grant["target_x_public"],
+                                                grant["initiator_nonce"], grant["target_nonce"])
+                company = decrypt(key, result["company_packet"], "company:" + grant["grant_id"])
+                from .company import CompanyStore
+                CompanyStore(self.data_dir).save(company)
+                return company
+            if result.get("status") in ("denied", "expired"):
+                raise RuntimeError("目标已拒绝加入公司或申请已过期")
+            time.sleep(0.3)
+        raise RuntimeError("等待目标批准加入公司超时")
+
+    def find_company_grant(self, health, message, scope, cwd=""):
+        from .company import CompanyStore
+        company = CompanyStore(self.data_dir).load()
+        if not company or health.get("company_id") != company["company_id"]:
+            return None
+        existing = self.find_grant(health["peer_id"], scope)
+        if existing and existing.get("mode") == "company":
+            return existing
+        response = request_company(self.url, self.identity, company, message, scope, cwd)
+        grant = response.get("grant")
+        if response.get("status") != "approved" or not grant:
+            return None
+        self.save_grant(grant)
+        return grant
+
+    def request(self, grant, message, scope, cwd="", timeout=300, status_timeout=600):
         signature = grant.get("target_signature") or ""
         signed = {key: value for key, value in grant.items() if key != "target_signature"}
         expected = hashlib.sha256(_unb64(grant.get("target_sign_public") or "")).hexdigest()[:32]
@@ -635,9 +825,38 @@ class DirectClient:
         key = self.identity.session_key(grant["target_x_public"],
                                         grant["initiator_nonce"], grant["target_nonce"])
         request_id = uuid.uuid4().hex
+        self.last_request_id = request_id
         aad = grant["grant_id"] + ":" + request_id
         payload = {"message": message, "scope": scope, "cwd": cwd, "timeout": timeout}
-        response = json_request(self.url + "/peer/request", {
-            "grant_id": grant["grant_id"], "request_id": request_id,
-            "packet": encrypt(key, payload, aad)}, timeout=min(930, timeout + 30))
-        return decrypt(key, response.get("packet") or {}, aad)
+        body = {"grant_id": grant["grant_id"], "request_id": request_id,
+                "packet": encrypt(key, payload, aad)}
+        health = json_request(self.url + "/peer/health")
+        if (health.get("request_policy") == "each" and
+                "request_v2" in (health.get("approval_features") or [])):
+            body["request_version"] = 2
+        deadline = time.monotonic() + status_timeout
+        awaiting_approval = False
+        while True:
+            response = json_request(self.url + "/peer/request", body,
+                                    timeout=min(930, timeout + 30))
+            status = response.get("status")
+            if status == "approval_required":
+                if not awaiting_approval:
+                    print(f"等待目标机器批准本次请求：{request_id}", flush=True)
+                    awaiting_approval = True
+                state = pairing_status(self.url, request_id, self.identity.peer_id).get("status")
+                if state == "denied":
+                    raise RuntimeError("目标机器已拒绝本次执行")
+                if state == "expired":
+                    raise RuntimeError("目标机器的本次执行审批已过期")
+                if state == "failed":
+                    raise RuntimeError("目标机器执行失败")
+            elif status == "execution_running":
+                pass
+            elif response.get("packet"):
+                return decrypt(key, response["packet"], aad)
+            else:
+                raise RuntimeError("目标返回了无法识别的直连响应")
+            if time.monotonic() >= deadline:
+                raise RuntimeError("等待目标机器批准或执行本次请求超时")
+            time.sleep(0.3)

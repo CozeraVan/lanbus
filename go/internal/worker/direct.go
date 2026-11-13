@@ -149,8 +149,10 @@ func RunDirect(cfg Config) error {
 		return map[string]any{"ok": r.code == 0, "exit_code": r.code, "reply": reply, "peer": cfg.Name}
 	}
 	server, err := peer.NewServer(peer.ServerConfig{
-		Name: cfg.Name, Agent: cfg.Agent, CWD: cfg.CWD, Command: command,
+		Name: cfg.Name, DisplayName: cfg.DisplayName, InstanceLabel: cfg.InstanceLabel,
+		RequestPolicy: cfg.RequestPolicy, Agent: cfg.Agent, CWD: cfg.CWD, Command: command,
 		DataDir: dataDir, Host: cfg.DirectBind, Port: cfg.DirectPort, Executor: executor,
+		Notifier: peer.DesktopNotifier(!cfg.NoOpenApproval),
 	})
 	if err != nil {
 		return err

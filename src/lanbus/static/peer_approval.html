@@ -62,23 +62,36 @@ async function refresh() {
   if (!SECRET) { document.getElementById('peerinfo').textContent = '请先填入审批密钥'; return; }
   try {
     const health = await (await fetch('/peer/health')).json();
-    document.getElementById('peerinfo').textContent = `${health.name} · ${health.agent} · peer_id ${health.peer_id} · ${health.endpoint}`;
+    document.getElementById('peerinfo').textContent = `目标：${health.display_name || health.name} · 实例：${health.instance_label || '默认'} · ${health.agent} · ${health.cwd_display || ''}`;
     const inbox = await api('/peer/inbox');
     const pending = inbox.requests || [];
     document.getElementById('pending').innerHTML = pending.length ? pending.map(r => `
       <div class="card">
-        <div class="meta">${esc(r.source?.hostname)} · ${esc(r.source?.agent)} · ${ago(r.created_at)} · request_id ${esc(r.request_id)}</div>
+        <div class="msg"><strong>${esc(r.source?.hostname || r.source?.peer_id)} / ${esc(r.source?.agent)}</strong>
+          ${r.kind === 'execution' ? '请求指挥' : r.kind === 'company' ? '请求加入公司' : '请求配对'} <strong>${esc(health.display_name || health.name)} / ${esc(health.instance_label || '默认')}</strong>，是否批准？</div>
+        <div class="meta">${ago(r.created_at)} · ${esc(r.scope)} · request_id ${esc(r.request_id)}</div>
         <div class="msg">${esc(r.message)}</div>
-        <div class="row">
-          <select id="scope-${esc(r.request_id)}">
-            <option value="chat" ${r.scope === 'chat' ? 'selected' : ''}>仅交流 chat</option>
-            <option value="project" ${r.scope === 'project' ? 'selected' : ''}>项目任务 project</option>
-          </select>
-          <input id="cwd-${esc(r.request_id)}" placeholder="工作目录（project 必填）" value="${esc(r.cwd || '')}" style="width:260px">
-          <button class="ok" onclick="approve('${esc(r.request_id)}','pair')">批准·配对</button>
-          <button class="warn" onclick="approve('${esc(r.request_id)}','session')">批准·会话(30分钟)</button>
-          <button class="no" onclick="deny('${esc(r.request_id)}')">拒绝</button>
-        </div>
+        ${r.kind === 'execution' ? `
+          <div class="meta">目标目录：${esc(r.cwd || health.cwd_display || '')} · 仅本次请求，不继承永久执行权限</div>
+          <div class="row">
+            <button class="ok" onclick="approveExecution('${esc(r.request_id)}')">批准一次</button>
+            <button class="no" onclick="deny('${esc(r.request_id)}')">拒绝</button>
+          </div>` : r.kind === 'company' ? `
+          <div class="meta">批准后，该成员可与本节点及同公司其他成员自由通信；无需逐次审批。</div>
+          <div class="row">
+            <button class="ok" onclick="approveCompany('${esc(r.request_id)}')">批准加入</button>
+            <button class="no" onclick="deny('${esc(r.request_id)}')">拒绝</button>
+          </div>` : `
+          <div class="row">
+            <select id="scope-${esc(r.request_id)}">
+              <option value="chat" ${r.scope === 'chat' ? 'selected' : ''}>仅交流 chat</option>
+              <option value="project" ${r.scope === 'project' ? 'selected' : ''}>项目任务 project</option>
+            </select>
+            <input id="cwd-${esc(r.request_id)}" placeholder="工作目录（project 必填）" value="${esc(r.cwd || '')}" style="width:260px">
+            <button class="ok" onclick="approve('${esc(r.request_id)}','pair')">批准·配对</button>
+            <button class="warn" onclick="approve('${esc(r.request_id)}','session')">批准·会话(30分钟)</button>
+            <button class="no" onclick="deny('${esc(r.request_id)}')">拒绝</button>
+          </div>`}
       </div>`).join('') : '<div class="empty">没有待确认的申请</div>';
     const grants = inbox.grants || [];
     document.getElementById('grants').innerHTML = grants.length ? grants.map(g => `
@@ -97,6 +110,8 @@ async function approve(id, mode) {
   try { await api('/peer/approve', { request_id: id, mode, scope, cwd: cwd || undefined }); toast('已批准（' + mode + ' / ' + scope + '）'); refresh(); }
   catch (e) { toast('批准失败：' + e.message); }
 }
+async function approveCompany(id) { try { await api('/peer/approve', { request_id: id }); toast('已批准加入公司'); refresh(); } catch (e) { toast('批准失败：' + e.message); } }
+async function approveExecution(id) { try { await api('/peer/approve', { request_id: id, kind: 'execution' }); toast('已批准一次'); refresh(); } catch (e) { toast('批准失败：' + e.message); } }
 async function deny(id) { try { await api('/peer/deny', { request_id: id }); toast('已拒绝'); refresh(); } catch (e) { toast(e.message); } }
 async function revoke(peer) { try { await api('/peer/revoke', { peer_id: peer }); toast('已撤销'); refresh(); } catch (e) { toast(e.message); } }
 refresh();

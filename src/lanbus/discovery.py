@@ -899,6 +899,11 @@ def probe_http(ip, port, timeout=HTTP_TIMEOUT, api_key="", tls=False):
         add("lanbus-peer", name=str(obj.get("name") or "lanbus-peer"),
             endpoint=f"{scheme}://{ip}:{port}", peer_id=obj["peer_id"],
             hostname=obj.get("hostname") or "", agent=obj.get("agent") or "",
+            display_name=obj.get("display_name") or "",
+            instance_label=obj.get("instance_label") or "",
+            cwd_display=obj.get("cwd_display") or "",
+            request_policy=obj.get("request_policy") or "",
+            approval_features=obj.get("approval_features") or [],
             direct_pairing=True)
 
     # lanbus hub
@@ -1181,7 +1186,12 @@ def _merge_lanbus_peers(rep, http_timeout=HTTP_TIMEOUT, peer_ports=PEER_PORTS):
                        "port": port, "transport": "http", "ai": True,
                        "endpoint": f"http://{ip}:{port}", "peer_id": obj["peer_id"],
                        "hostname": obj.get("hostname") or "",
-                       "agent": obj.get("agent") or "", "direct_pairing": True}
+                       "agent": obj.get("agent") or "", "direct_pairing": True,
+                       "display_name": obj.get("display_name") or "",
+                       "instance_label": obj.get("instance_label") or "",
+                       "cwd_display": obj.get("cwd_display") or "",
+                       "request_policy": obj.get("request_policy") or "",
+                       "approval_features": obj.get("approval_features") or []}
             host.setdefault("services", []).append(service)
             host.setdefault("agents", []).append(service)
             if port not in host.setdefault("ports", []):
@@ -1189,7 +1199,13 @@ def _merge_lanbus_peers(rep, http_timeout=HTTP_TIMEOUT, peer_ports=PEER_PORTS):
             agents.append({"host": ip, "port": port, "kind": "lanbus-peer",
                            "name": service["name"], "os_guess": host.get("os_guess") or "",
                            "models": [], "endpoint": service["endpoint"],
-                           "peer_id": obj["peer_id"], "transport": "http"})
+                           "peer_id": obj["peer_id"], "transport": "http",
+                           "hostname": service["hostname"], "agent": service["agent"],
+                           "display_name": service["display_name"],
+                           "instance_label": service["instance_label"],
+                           "cwd_display": service["cwd_display"],
+                           "request_policy": service["request_policy"],
+                           "approval_features": service["approval_features"]})
             seen.add((ip, port))
     summary = rep.get("summary")
     if isinstance(summary, dict):
