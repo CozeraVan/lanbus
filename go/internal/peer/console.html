@@ -28,7 +28,9 @@ main{padding:18px 22px;display:flex;flex-direction:column;max-width:1000px}
 #tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
 #tabs button{padding:5px 12px}#tabs button.active{border-color:var(--accent);background:#1f6feb22}
 #dialog{flex:1;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--panel);min-height:280px;max-height:calc(100vh - 280px)}
-.msg{margin:10px 0;max-width:85%}.msg .who{font-size:12px;color:var(--muted);margin-bottom:3px}
+.msg{margin:10px 0;max-width:85%}.msg .who{font-size:12px;color:var(--muted);margin-bottom:3px;display:flex;gap:8px;align-items:center}
+.copybtn,.togglebtn{font-size:11px;padding:1px 8px;background:#21262d;border:1px solid var(--line);border-radius:6px;color:var(--muted);cursor:pointer}
+.copybtn:hover,.togglebtn:hover{border-color:var(--accent);color:var(--text)}.togglebtn{margin-top:6px}
 .msg .bubble{padding:9px 12px;border-radius:12px;white-space:pre-wrap;word-break:break-word}
 .msg.out{margin-left:auto}.msg.out .bubble{background:#1f6feb33;border:1px solid #1f6feb55}
 .msg.in .bubble{background:#21262d;border:1px solid var(--line)}
@@ -137,7 +139,25 @@ function renderTabs(){const tabs=$('#tabs');tabs.innerHTML='';const approved=Obj
 function renderDialog(){const box=$('#dialog');const t=state.targets[state.active];if(!t){box.innerHTML='<div class="muted small">选择一个已批准的目标。</div>';return}
   syncCtxControls();
   if(!t.historyLoaded){t.historyLoaded=true;loadHistory(t);return}
-  box.innerHTML='';if(!t.messages.length){box.innerHTML='<div class="muted small">与 '+esc(t.name)+' 的多轮对话（自动携带上下文）。输入信息并发送。</div>'}t.messages.forEach(m=>{const d=document.createElement('div');d.className='msg '+m.dir;const who=m.dir==='out'?('操控者 → '+esc(t.name)):(m.dir==='in'?esc(t.name):'系统');d.innerHTML='<div class="who">'+who+'</div><div class="bubble">'+esc(m.text)+'</div>';box.appendChild(d)});box.scrollTop=box.scrollHeight}
+  box.innerHTML='';if(!t.messages.length){box.innerHTML='<div class="muted small">与 '+esc(t.name)+' 的多轮对话（自动携带上下文）。输入信息并发送。</div>'}t.messages.forEach((m,idx)=>box.appendChild(renderMsg(t,m,idx)));box.scrollTop=box.scrollHeight}
+
+// renderMsg builds one bubble with a copy button and collapses long replies.
+// Text is set via textContent (never innerHTML) so agent output cannot inject HTML.
+function renderMsg(t,m,idx){const d=document.createElement('div');d.className='msg '+m.dir;
+  const who=m.dir==='out'?('操控者 → '+esc(t.name)):(m.dir==='in'?esc(t.name):'系统');
+  const head=document.createElement('div');head.className='who';head.innerHTML='<span>'+who+'</span>';
+  if(m.dir!=='sys'){const cp=document.createElement('button');cp.className='copybtn';cp.textContent='复制';cp.onclick=()=>copyMsg(idx);head.appendChild(cp)}
+  d.appendChild(head);
+  const bub=document.createElement('div');bub.className='bubble';
+  const long=m.text.length>800;const txt=document.createElement('span');
+  txt.textContent=(long&&!m.expanded)?(m.text.slice(0,300)+' …'):m.text;
+  bub.appendChild(txt);
+  if(long){const tg=document.createElement('button');tg.className='togglebtn';tg.textContent=m.expanded?'收起':'展开（'+m.text.length+' 字符）';tg.onclick=()=>{m.expanded=!m.expanded;renderDialog()};bub.appendChild(document.createElement('br'));bub.appendChild(tg)}
+  d.appendChild(bub);return d}
+
+async function copyMsg(idx){const t=state.targets[state.active];if(!t||!t.messages[idx])return;const text=t.messages[idx].text;
+  try{await navigator.clipboard.writeText(text);toast('已复制')}
+  catch(e){const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();try{document.execCommand('copy');toast('已复制')}catch(_){toast('复制失败，请手动选择')}ta.remove()}}
 
 // loadHistory restores the persisted conversation once per target so the dialog
 // survives page reloads; the backend keeps the transcript per controller/target.
