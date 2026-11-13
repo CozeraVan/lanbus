@@ -169,19 +169,111 @@ func TestConsoleConversationIsolation(t *testing.T) {
 
 // TestBuildContextMessage checks first-turn passthrough and the context budget.
 func TestBuildContextMessage(t *testing.T) {
-	if got := buildContextMessage(nil, "hi"); got != "hi" {
+	if got := buildContextMessage(nil, "hi", 0); got != "hi" {
 		t.Fatalf("first turn should pass through unchanged, got %q", got)
 	}
 	var turns []any
 	for i := 0; i < 40; i++ {
 		turns = append(turns, map[string]any{"role": "user", "text": strings.Repeat("x", 5000)})
 	}
-	out := buildContextMessage(turns, "latest")
+	out := buildContextMessage(turns, "latest", 0)
 	if !strings.Contains(out, "latest") || !strings.Contains(out, "最新消息") {
 		t.Fatalf("context missing latest message marker: %q", out[:min(200, len(out))])
 	}
 	if n := len([]rune(out)); n > consoleContextRunes+2000 {
 		t.Fatalf("context not bounded: %d runes", n)
+	}
+}
+
+// TestBuildContextMessageMaxTurns checks the caller-supplied turn limit keeps
+// only the most recent turns.
+func TestBuildContextMessageMaxTurns(t *testing.T) {
+	turns := []any{
+		map[string]any{"role": "user", "text": "one"},
+		map[string]any{"role": "agent", "text": "r1"},
+		map[string]any{"role": "user", "text": "two"},
+		map[string]any{"role": "agent", "text": "r2"},
+	}
+	out := buildContextMessage(turns, "new", 2)
+	if strings.Contains(out, "one") || strings.Contains(out, "r1") {
+		t.Fatalf("maxTurns=2 should drop the oldest exchange: %q", out)
+	}
+	if !strings.Contains(out, "two") || !strings.Contains(out, "r2") || !strings.Contains(out, "new") {
+		t.Fatalf("maxTurns=2 missing recent turns: %q", out)
+	}
+}
+
+// TestConsoleContextToggle proves context:false sends the raw message but still
+// records the exchange in history.
+func TestConsoleContextToggle(t *testing.T) {
+	root := t.TempDir()
+	host := newConsolePeer(t, root, "host", "pair", nil)
+	var mu sync.Mutex
+	var received []string
+	target := newConsolePeer(t, root, "target", "pair", func(message, scope, cwd string, timeout float64) map[string]any {
+		mu.Lock()
+		received = append(received, message)
+		mu.Unlock()
+		return map[string]any{"ok": true, "exit_code": 0, "reply": "echo:" + message, "peer": "target"}
+	})
+	consolePairApprove(t, host, target)
+
+	consoleReq(t, "POST", host.URL+"/peer/console/send", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL, "message": "hello", "scope": "chat"})
+	code, out := consoleReq(t, "POST", host.URL+"/peer/console/send", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL, "message": "again", "scope": "chat", "context": false})
+	if code != 200 {
+		t.Fatalf("send code=%d out=%v", code, out)
+	}
+	mu.Lock()
+	if received[1] != "again" {
+		t.Fatalf("context:false should send raw message, got %q", received[1])
+	}
+	mu.Unlock()
+	// History still records both exchanges.
+	code, out = consoleReq(t, "POST", host.URL+"/peer/console/history", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL})
+	if code != 200 {
+		t.Fatalf("history code=%d out=%v", code, out)
+	}
+	if turns, _ := out["turns"].([]any); len(turns) != 4 {
+		t.Fatalf("expected 4 recorded turns, got %d", len(turns))
+	}
+}
+
+// TestConsoleMaxTurns proves max_turns limits how much history is injected.
+func TestConsoleMaxTurns(t *testing.T) {
+	root := t.TempDir()
+	host := newConsolePeer(t, root, "host", "pair", nil)
+	var mu sync.Mutex
+	var received []string
+	// Short reply (not an echo of the whole prompt) so stored agent turns do not
+	// nest earlier context, which would mask the turn-limit assertion.
+	target := newConsolePeer(t, root, "target", "pair", func(message, scope, cwd string, timeout float64) map[string]any {
+		mu.Lock()
+		received = append(received, message)
+		mu.Unlock()
+		return map[string]any{"ok": true, "exit_code": 0, "reply": "ack", "peer": "target"}
+	})
+	consolePairApprove(t, host, target)
+
+	for _, m := range []string{"alpha-one", "beta-two", "gamma-three"} {
+		consoleReq(t, "POST", host.URL+"/peer/console/send", host.approvalSecret,
+			map[string]any{"controller": "host", "target_url": target.URL, "message": m, "scope": "chat"})
+	}
+	code, out := consoleReq(t, "POST", host.URL+"/peer/console/send", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL, "message": "delta-four", "scope": "chat", "max_turns": 2})
+	if code != 200 {
+		t.Fatalf("send code=%d out=%v", code, out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	last := received[len(received)-1]
+	if !strings.Contains(last, "gamma-three") || !strings.Contains(last, "delta-four") {
+		t.Fatalf("max_turns=2 should keep the newest exchange: %q", last)
+	}
+	if strings.Contains(last, "alpha-one") {
+		t.Fatalf("max_turns=2 should drop the oldest exchange: %q", last)
 	}
 }
 

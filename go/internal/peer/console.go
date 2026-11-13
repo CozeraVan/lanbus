@@ -227,7 +227,12 @@ func (s *Server) consoleSend(body map[string]any) (int, any) {
 	// turn (no history) is sent unchanged, preserving one-shot behavior.
 	convKey := targetURL
 	priorTurns := convTurns(loadConversations(dir), convKey)
-	outgoing := buildContextMessage(priorTurns, message)
+	// Context is on by default; context:false sends a clean one-shot message.
+	// The exchange is recorded either way so history stays complete.
+	outgoing := message
+	if asBool(body["context"], true) {
+		outgoing = buildContextMessage(priorTurns, message, int(asFloat(body["max_turns"])))
+	}
 	result, err := client.RequestV2(grant, outgoing, scope, asString(body["cwd"]), timeout, statusTimeout)
 	if err != nil {
 		return 502, map[string]any{"error": err.Error()}
@@ -279,7 +284,8 @@ func (s *Server) consoleReset(body map[string]any) (int, any) {
 
 const (
 	consoleConvFile     = "console-conversations.json"
-	consoleMaxTurns     = 16    // most recent turns kept in the context prompt
+	consoleMaxTurns     = 16    // default most recent turns kept in the context prompt
+	consoleMaxTurnsHard = 64    // upper bound for a caller-supplied turn limit
 	consoleTurnRunes    = 1500  // per-turn truncation inside the context prompt
 	consoleContextRunes = 12000 // total history budget in the context prompt
 )
@@ -340,11 +346,17 @@ func truncateRunes(s string, n int) string {
 // buildContextMessage renders prior turns plus the new message into one prompt
 // so a freshly spawned target agent sees the conversation. With no history it
 // returns the message unchanged. History is bounded by turn count and runes.
-func buildContextMessage(turns []any, message string) string {
+func buildContextMessage(turns []any, message string, maxTurns int) string {
 	if len(turns) == 0 {
 		return message
 	}
-	start := len(turns) - consoleMaxTurns
+	if maxTurns <= 0 {
+		maxTurns = consoleMaxTurns
+	}
+	if maxTurns > consoleMaxTurnsHard {
+		maxTurns = consoleMaxTurnsHard
+	}
+	start := len(turns) - maxTurns
 	if start < 0 {
 		start = 0
 	}
