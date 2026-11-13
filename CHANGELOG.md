@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [1.9.1] - 2026-11-13
+
+### Added
+- **Zero-config direct agent peering**: encrypted Python/Go peer protocol, discovery, persistent pairing, session grants, target-side human approval, denial and revocation.
+- **Native product operations**: `lanbus` CLI, daemon installation, backup/restore, optional hub TLS and loopback-only pprof.
+- **Native peer approval entry**: `lanbus peer-ui --name NAME` opens the local approval page without Python and shares loopback-only metadata parsing with the Windows tray.
+- **Release packaging**: tag-driven Windows Setup EXE/portable ZIP, macOS PKG, Linux DEB, raw binaries, wheel and SHA-256 checksums, with test, version and required-artifact gates.
+
+### Changed
+- Python wheels read the single `__version__` source dynamically; release tags inject the same version into Go binaries.
+- Windows portable `lanbus.cmd` now invokes the bundled native `lanbus.exe` instead of requiring Python.
+- Python regression suite expanded to 91 tests, including release-asset checks.
+
+### Fixed
+- Stabilized direct peer execution, agent adapters, cross-machine conversations and peer-state handling.
+- `lanbus healthcheck` now rejects non-200 responses, invalid or non-object JSON, missing `ok`, and `ok=false` instead of treating any HTTP response as healthy.
+
 ## [1.9.0] - 2026-11-05
 
 ### Added
