@@ -1,5 +1,12 @@
 # Protocol
 
+lanbus has two independent protocol surfaces:
+
+- **Hub mode (port 8788)** — the orchestration hub documented below: MCP for agents (`POST /mcp`), REST for workers (`POST /worker/*`), plus read-only task logs/artifacts over GET.
+- **Direct company network (port 8790)** — symmetric peers with no hub; see [Direct peer protocol](#direct-peer-protocol-port-8790) at the end of this document. Agents reach their own local node through the stdio MCP server `lanbus-mcp`.
+
+## Hub surface (port 8788)
+
 Two surfaces on one port: **MCP** for agents (`POST /mcp`), **REST** for workers (`POST /worker/*`), plus read-only task logs/artifacts over GET.
 
 Base URL: `http://HUB_LAN_IP:8788` (or `https://` with `--tls-cert/--tls-key`). Every endpoint except `/health` requires:
@@ -328,3 +335,52 @@ Discovery output is ordinary task evidence: `result` contains a 20 kB JSON summa
 `GET /ui` serves the dashboard HTML (public); `GET /api/envs` is authenticated.
 
 No auth. `{"ok":true,"ts":"...","version":"1.9.0","counts":{"queued":0,"running":1,...}}` — used by Docker healthcheck and CI wait loops.
+
+---
+
+## Direct peer protocol (port 8790)
+
+The direct company network has no hub and no bearer tokens. Every node runs the same symmetric peer server (`lanbus agent --direct`, default port **8790**; discovery scans 8790/8791). Python (`src/lanbus/peer.py`) and Go (`go/internal/peer`) implement the same wire protocol; cross-language interoperability is covered by `cross-version/company_test.py`.
+
+### Identity and encryption
+
+- Each node owns an **Ed25519** identity keypair; requests are signed so a peer id cannot be spoofed.
+- Pairing performs an **X25519** key agreement (initiator/target nonces); subsequent messages are encrypted with **AES-GCM** under the derived session key.
+- A company shares one secret among its members, distributed inside an encrypted `company_packet` at approval time. Trust boundary: every member can read company traffic; `company leave` removes local state but does not revoke grants already issued on remote machines.
+
+### Endpoints
+
+| Endpoint | Method | Auth | Purpose |
+|---|---|---|---|
+| `/peer/health` | GET | none | Node identity card (peer id, name, env, capabilities) used by discovery |
+| `/peer/pair` | POST | signed request | Submit a pairing or company-join request; returns a `request_id` to poll |
+| `/peer/pair/status?id=…&peer_id=…` | GET | requester identity | Poll a pending pairing/execution request; approved responses carry the grant (and `company_packet` for company joins) |
+| `/peer/request` | POST | grant + encrypted payload | Send a chat message or execution request to an already-granted peer |
+| `/peer/inbox` | GET | loopback + approval secret | List pending requests and current grants |
+| `/peer/approve` | POST | loopback + approval secret | Approve a pending request with `mode` (`pair`/`session`/`company`) and `scope` (`chat`/`project`) |
+| `/peer/deny` | POST | loopback + approval secret | Deny a pending request |
+| `/peer/revoke` | POST | loopback + approval secret | Revoke a previously issued grant by `peer_id` |
+| `/peer/ui` | GET | loopback only | Local human approval page (`lanbus peer-ui`) |
+
+Approval, denial, revocation, the inbox, and the approval UI accept **only loopback clients on the target machine**, authenticated with the per-node approval secret (`X-Lanbus-Approval`). A remote caller gets `403` — human authorization can never be performed or forged from another machine. A chat-only request cannot be upgraded to `project` scope at approval time; project scope requires an existing authorized working directory.
+
+### Policies
+
+Each node decides how incoming granted requests are handled:
+
+- `company` (default) — company members may chat and delegate without further prompts;
+- `each` — every execution request needs a fresh local approval;
+- `pair` — only explicitly paired peers are accepted.
+
+### Local MCP entry (`lanbus-mcp`)
+
+Agents talk to their own node over stdio MCP, not over HTTP. The server reads the node state directory from `LANBUS_PEER_DIR`; no secret appears in the MCP config. Tools:
+
+| Tool | Purpose |
+|---|---|
+| `lanbus_company_list` | List companies this node belongs to and their members |
+| `lanbus_agent_discover` | Scan the LAN for peer nodes (8790/8791) |
+| `lanbus_agent_send` | Send a chat message to a member |
+| `lanbus_agent_delegate` | Delegate an execution task to a member |
+| `lanbus_agent_result` | Fetch a delegated task's result |
+| `lanbus_company_join` | Request membership in another node's company (human approves once on that machine) |

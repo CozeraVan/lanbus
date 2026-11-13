@@ -7,9 +7,11 @@ Bilingual entry points:
 
 Reference:
 
-- [Architecture](architecture.md) — components, pull model, state machine, lease
-  recovery, logs, evidence, artifacts, discovery, PTY, approvals, desktop shell.
-- [Protocol](protocol.md) — worker REST, MCP tools, SSE, artifacts, auth.
+- [Architecture](architecture.md) — direct company network (symmetric peers,
+  membership, policies) plus hub-mode components, pull model, state machine,
+  lease recovery, logs, evidence, artifacts, discovery, PTY, approvals, desktop shell.
+- [Protocol](protocol.md) — direct peer protocol (`/peer/*`, port 8790), hub
+  worker REST, MCP tools, SSE, artifacts, auth.
 - [Troubleshooting](troubleshooting.md) — common Windows/WSL/macOS/agent issues.
 - [Windows 实机验证清单](windows-validation.md) — 构建、双 Hub／Worker、状态机、恢复与安全验证；含 `scripts/validate-windows.ps1` 一键自动验证入口。
 - [Go migration](go-migration.md) — why the product core is Go and what remains.

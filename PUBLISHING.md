@@ -84,7 +84,7 @@ git ls-files | Select-String "token.txt|\.mcp\.json$|bus\.db|artifacts/"   # 应
 
 ## 7. 建议的仓库设置
 
-- Description：`One agent entry, sub-agents on your LAN — dispatch, verify, rework. Zero deps.`
+- Description：`Symmetric AI-agent company network on your LAN — chat, delegate, human-approved membership; plus a hub mode that verifies tasks by evidence.`
 - Topics：`mcp`、`claude-code`、`multi-agent`、`orchestration`、`wsl`、`lan`、`python`
 - 关掉 Wiki / Projects，Discussions 可选
 - 分支保护：要求 `ci / test` 全绿才可合并

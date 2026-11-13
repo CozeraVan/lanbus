@@ -2,13 +2,25 @@
 
 [中文总览](overview.zh-CN.md) · [Back to README](../README.md) · [Architecture](architecture.md) · [Protocol](protocol.md)
 
-lanbus is a LAN-wide orchestration bus for AI agents. A main agent (an A agent CLI, a B agent CLI, a C agent desktop,
-or any MCP client) dispatches work to agents running on other
-machines, then reviews machine-checkable evidence before accepting it.
+lanbus connects the AI agents on your LAN in two complementary modes:
+
+- **Direct company network (default)** — symmetric agent nodes with no hub. Any node creates a company; other machines join through any existing member with one human approval, then chat and delegate project tasks in either direction over encrypted peer links. The local agent uses the same identity via `lanbus-mcp`.
+- **Hub orchestration** — a main agent (an A agent CLI, a B agent CLI, a C agent desktop, or any MCP client) dispatches work to workers on other machines, then reviews machine-checkable evidence before accepting it.
 
 ## 1. Principle
 
-### One inbound surface, many outbound workers
+### Symmetric peers, human-gated membership (direct mode)
+
+Every node can discover, ask, receive messages, and delegate — there is no
+host/worker hierarchy and no central token server. Nodes authenticate with
+Ed25519 identities and exchange X25519/AES-GCM encrypted payloads. Joining a
+company requires one human approval on an existing member; non-members can
+never bypass approval through the company path. Policies: `company` (free
+member communication), `each` (human approves every request), `pair` (legacy
+persistent pairing). All members share the company secret, so treat membership
+as a trust boundary.
+
+### One inbound surface, many outbound workers (hub mode)
 
 The **hub** is the only listening service. Every **worker** opens outbound
 connections to the hub and pulls tasks. That removes per-machine firewall rules
@@ -68,7 +80,8 @@ own machine. Running a worker or `lanbus discover` there closes that gap.
 | `lanbus-worker` | Go | Pull worker: process supervisor, Job Objects/PTY, agent-CLI adapters (or `--cmd`), discover/ask, artifacts |
 | `lanbus-scan` | Go | Zero-install LAN scanner used by discovery |
 | `lanbus-gui` | Go + Wails/WebView2 | Windows desktop window + tray, embedded dashboard |
-| `lanbus` | Python | CLI, discovery fallback, browser helper, Python worker, Python hub fallback |
+| `lanbus` | Python | CLI, direct peer/company node, `lanbus-mcp` local MCP entry, discovery fallback, browser helper, Python worker, Python hub fallback |
+| `lanbus-worker` (direct) | Go | Symmetric peer node with the same company protocol as the Python implementation |
 | `lanbus-hub` | Python | Reference hub and fallback for browser/legacy tasks |
 
 ### Data and state
@@ -99,6 +112,11 @@ own machine. Running a worker or `lanbus discover` there closes that gap.
   `POST /chat`.
 - Operator: `GET /api/confirmations`, `POST /confirm/approve`,
   `POST /confirm/revoke`.
+- Direct peer (port 8790, encrypted): `/peer/health`, `/peer/pair`,
+  `/peer/pair/status`, `/peer/request`, `/peer/inbox`, `/peer/approve`,
+  `/peer/deny`, `/peer/revoke`, `/peer/ui`. Local MCP tools:
+  `lanbus_agent_discover`, `lanbus_agent_send`, `lanbus_agent_delegate`,
+  `lanbus_agent_result`, `lanbus_company_list`, `lanbus_company_join`.
 
 ### Process control
 
@@ -135,7 +153,25 @@ own machine. Running a worker or `lanbus discover` there closes that gap.
 
 ## 4. Usage
 
-### Install and start
+### Direct company network
+
+```bash
+lanbus company create --name mac-agent --company-name "My team"
+lanbus agent --name mac-agent --env macos --direct --cwd ~/project --agent claude
+# on another machine, after starting its own node:
+lanbus company join --to mac-agent --name win-agent   # human approves once on mac-agent
+lanbus chat --to mac-agent --message "Introduce your environment"
+lanbus run --to win-agent --cwd D:/proj --message "Run the tests"
+```
+
+Local MCP entry (no secret in config):
+
+```json
+{"mcpServers": {"lanbus": {"command": "lanbus-mcp",
+  "env": {"LANBUS_PEER_DIR": "/Users/me/.lanbus/peers/mac-agent"}}}}
+```
+
+### Install and start (hub mode)
 
 ```bash
 pip install .

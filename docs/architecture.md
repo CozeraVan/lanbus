@@ -1,6 +1,30 @@
 # Architecture
 
-## Components
+lanbus has two modes that share the same binaries and adapters:
+
+1. **Direct company network** — symmetric peer nodes, no hub. Each node listens on its own port (default `8790`), discovers peers, and exchanges encrypted chat/project requests. Company membership removes pairwise setup; a human approves each join once, on any existing member.
+2. **Hub orchestration** — one hub, N pull workers, evidence-checked task lifecycle. Everything below the "Direct company network" section describes this mode unless stated otherwise.
+
+## Direct company network
+
+```
+node A (mac-agent) ◄──encrypted peer link──► node B (a-agent)
+        ▲                                        ▲
+        └──────────────► node C ◄────────────────┘
+              joins via A or B; one human approval
+```
+
+- **Symmetric roles**: every node can discover, ask, receive messages, and delegate. `lanbus agent` is the entry point; `lanbus worker --direct` remains compatible. There is no host/worker hierarchy and no central token server.
+- **Identity and transport**: Ed25519 node identities, X25519 key agreement, AES-GCM encrypted payloads. Company credentials are delivered through the encrypted join channel. Private files use `0700` directories, `0600` files, and atomic writes on POSIX.
+- **Membership**: `lanbus company create` starts a company; `lanbus company join --to <member>` applies through any existing member. The request appears only on that member's machine, where a person approves once (`lanbus allow REQUEST_ID --pair`, or the local approval page / desktop notification). Approval, denial, and revocation accept only loopback requests on the target.
+- **Request policies**: `company` (default) lets members communicate freely while non-members still need human pairing; `each` requires a human "Approve once" for every chat/task, showing source and target instance; `pair` is the legacy persistent pairing with optional session scope (30 idle minutes or target restart expiry).
+- **Local MCP entry**: `lanbus-mcp` runs on the node's machine against `LANBUS_PEER_DIR` and exposes `lanbus_agent_discover` / `lanbus_agent_send` / `lanbus_agent_delegate` / `lanbus_agent_result` / `lanbus_company_list` / `lanbus_company_join`. The company secret never goes into MCP configuration.
+- **Instance disambiguation**: display names and instance labels distinguish multiple agents/windows on one machine; ambiguity errors list host, agent, instance, cwd, and endpoint instead of silently picking the first candidate.
+- **Trust boundary**: all members share the company secret. Compromise of one member may compromise the whole company; leaving does not revoke grants already stored by other nodes. Project tasks are confined to approved working directories, but the agent CLI is not a full OS sandbox.
+
+Python (`src/lanbus/peer.py`, `company.py`) and Go (`go/internal/peer`) implement the same protocol; cross-language membership and chat are covered by `cross-version/company_test.py`.
+
+## Hub-mode components
 
 | Component | Process | Responsibility |
 |---|---|---|
@@ -172,8 +196,9 @@ differ from the built-ins.
 SQLite shape. It supports register/claim/progress/log/submit/recover, MCP
 dispatch/envs/list/result/await/logs/review/cancel/interrupt/artifact, SSE, and
 artifact files. `tests/test_go_hub.py` runs the same fake worker against the Python
-hub and `lanbusd` and compares status/exit/verify/result. The Go hub is now the default; the Python hub remains
-the default and still owns chat, discovery, browser, and the Web UI.
+hub and `lanbusd` and compares status/exit/verify/result. The Go hub is the
+default on port 8788; the Python hub remains available as a fallback for
+browser tasks and legacy compatibility.
 
 ## Local worker supervisor
 

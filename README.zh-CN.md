@@ -2,40 +2,61 @@
 
 [![CI](https://github.com/CozeraVan/lanbus/actions/workflows/ci.yml/badge.svg)](https://github.com/CozeraVan/lanbus/actions/workflows/ci.yml)
 
-**一个入口，派活到局域网里所有其它环境的 agent。**
+**局域网 AI agent 的对称公司成员网络 —— 外加一个按证据验收任务的 Hub 编排模式。**
 
 [English](README.md) · [中文](README.zh-CN.md) · [Overview](docs/overview.en.md) · [中文总览](docs/overview.zh-CN.md) · [架构](docs/architecture.md) · [协议](docs/protocol.md)
 
-你跟一个主 agent 说话（A agent CLI、B agent CLI、C agent 桌面端，或任何会说 MCP 的客户端），它把任务派给跑在别的机器上的 agent —— Windows 负责 Web UI、WSL 负责 Linux 构建、macOS 负责原生打包 —— 然后**核对真实改动**，决定通过还是打回重做。
+lanbus 现在有两种互补模式：
+
+- **直连公司成员网络（默认）** —— 每台机器跑一个对称 agent 节点。任一节点可创建公司；其他机器向**任一现有成员**申请加入，人工批准一次即可。之后同公司成员双向对话、派发项目任务，无需 Hub、无需共享 token 服务器、无需两两配对。本机 agent 通过 MCP（`lanbus-mcp`）使用同一身份。
+- **Hub 模式（任务编排）** —— 主 agent 把任务派给其他机器上的 worker，然后**核对真实改动**（你的验收命令退出码、真实 `git diff`、产物），决定通过还是打回重做。适合需要中心任务队列、租约和流式日志的场景。
 
 零硬依赖，只用 Python 标准库，不出局域网。可选 Playwright 解锁真实浏览器动作；本机 Chrome/Edge 提供降级截图。内置扫描器可以在**不往对方机器装任何东西**的前提下，发现局域网里已经打开的 AI agent。
 
 ```
-                    你 ──► 主 agent（A agent CLI）
-                                  │ MCP: lan_dispatch / lan_logs / lan_result / lan_review
-                                  ▼
-                        ┌───────────────────┐
-                        │  lanbus hub :8788 │  SQLite 任务表 + 状态机
-                        └───┬───────────┬───┘
-              REST（主动拉）│           │  REST（主动拉）
-                        ┌───▼────┐  ┌───▼────┐
-                        │ win-ui │  │ mac-ui │
-                        │windows │  │ macos  │
-                        └───┬────┘  └────────┘
-                            │ 同一台机器
-                        ┌───▼─────┐
-                        │wsl-core │
-                        │  wsl    │
-                        └─────────┘
+直连公司成员网络（无 Hub）              Hub 模式（任务编排）
+
+  mac-agent ◄────► a-agent               你 ──► 主 agent（MCP）
+      ▲   加密对等链路  ▲                          │ lan_dispatch / lan_review
+      │                │                          ▼
+      └──► c-agent ◄───┘                ┌───────────────────┐
+   经任一成员加入，                      │  lanbus hub :8788 │
+   人工批准一次                          └───┬───────────┬───┘
+                              REST（主动拉）│           │ REST（主动拉）
+                                        ┌───▼────┐  ┌───▼────┐
+                                        │ win-ui │  │ mac-ui │
+                                        └────────┘  └────────┘
 ```
 
-worker 是**主动去 hub 拉活**的，所以只有 hub 那台机器需要开入站端口，三个子环境都不用配防火墙。
+直连模式下每个节点监听自己的端口（默认 `8790`），对等通信走 Ed25519/X25519/AES-GCM 加密通道。Hub 模式下 worker **主动去 hub 拉活**，只有 hub 那台机器需要开入站端口。
 
 ---
 
-## 为什么需要它
+## 快速开始：直连公司成员网络（3 分钟）
 
-三个环境各跑一个 agent 时，你本人就成了消息总线：在一个窗口里拿任务描述，复制到另一个窗口，做完再自己肉眼验一遍。lanbus 把这个回路换成可机器判定的证据：
+每台机器启动一个对称节点（原生二进制或 `pip install .`）：
+
+```bash
+# 机器 1 —— 创建公司并运行 agent 节点
+lanbus company create --name mac-agent --company-name "我的团队"
+lanbus agent --name mac-agent --env macos --direct --cwd ~/project --agent claude
+
+# 机器 2 —— 向任一现有成员申请加入；该成员机器上人工批准一次
+lanbus agent --name win-agent --env windows --direct --cwd D:/proj --agent codex
+lanbus company join --to mac-agent --name win-agent
+
+# 双向通信，无需其他配置
+lanbus chat --to mac-agent --message "请介绍你的环境，并给出协作方案"
+lanbus run --to win-agent --cwd D:/proj --message "检查项目并运行测试"
+```
+
+策略：`company`（默认，同公司成员自由通信）、`each`（每次请求都需人工“批准一次”）、`pair`（旧持续配对）。非成员始终需要人工审批。MCP 接入、实例标签与安全模型见下文[Agent 公司成员网络](#agent-公司成员网络无需-hub-或-token)。
+
+---
+
+## 为什么需要 Hub 模式
+
+三个环境各跑一个 agent 时，你本人就成了消息总线：在一个窗口里拿任务描述，复制到另一个窗口，做完再自己肉眼验一遍。Hub 模式把这个回路换成可机器判定的证据：
 
 | 没有 lanbus | 有 lanbus |
 |---|---|
@@ -288,7 +309,7 @@ lanbus daemon uninstall
 
 ---
 
-## 快速开始（3 分钟）
+## 快速开始：Hub 模式（3 分钟）
 
 ### 1. hub —— 放在常驻那台机器（通常是 Windows）
 
@@ -399,7 +420,9 @@ cp -r /path/to/lanbus/integrations/mcp-client-preset/commands .mcp/commands
 
 ## MCP 工具
 
-| 工具 | 作用 |
+有两套 MCP 入口。**直连模式**在本机运行 `lanbus-mcp`，使用节点身份（`LANBUS_PEER_DIR`，配置中不写 secret）：`lanbus_agent_discover`、`lanbus_agent_send`、`lanbus_agent_delegate`、`lanbus_agent_result`、`lanbus_company_list`、`lanbus_company_join`。**Hub 模式**把 `http://HUB:8788/mcp` 与 agent token 注册进客户端，暴露下表编排工具。
+
+| 工具（Hub 模式） | 作用 |
 |---|---|
 | `lan_envs` | 在线 worker、能力（`browser`）与可用 `env` 清单，派单前先调 |
 | `lan_dispatch` | 派一张单；`context` 会自动拼进 prompt；`wait_s>0` 阻塞到需要验收 |
@@ -433,7 +456,7 @@ queued ──claim──► claimed ──► running ──submit──► subm
 
 ## HTTP 接口（给脚本和看板用）
 
-除 `/health` 外全部要求 `Authorization: Bearer <token>`。
+Hub 模式，端口 8788。除 `/health` 外全部要求 `Authorization: Bearer <token>`。直连节点在 8790 端口暴露另一套加密对等协议（`/peer/*`，见[协议文档](docs/protocol.md)）；审批、拒绝、撤销只接受目标本机回环请求。
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
@@ -457,6 +480,10 @@ queued ──claim──► claimed ──► running ──submit──► subm
 ---
 
 ## 安全
+
+直连模式：Ed25519 身份、X25519 密钥协商、AES-GCM 加密；公司加入凭证经加密通道下发。审批、拒绝、撤销只接受目标本机回环请求。**公司 secret 由全部成员共享**——任一成员被攻陷都可能危及整个公司；离开公司不会自动撤销其他节点已保存的授权。项目任务限制在批准的 cwd 内，但底层 agent CLI 不等于完整 OS 沙箱，授权前应检查来源和请求内容。
+
+Hub 模式：
 
 - **双角色 token**：主 agent token（`--token`）用于 MCP/读/产物；worker token（`--worker-token`）只能调 `/worker/*`。不配置 worker token 时两者共用，保持向后兼容。可选 `--worker-tokens` 给每个 worker 独立口令，一个口令只对一个 worker 名生效。
 - **worker 归属校验**：submit/progress/log 必须匹配当前任务的 worker 名和随机 `claim_token`；旧 worker 不能把已重排/已取消的任务救活。
