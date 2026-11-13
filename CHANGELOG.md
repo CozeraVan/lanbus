@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [1.9.2] - 2026-11-13
+
+### Fixed
+- `lanbus-worker --version` and `lanbus-scan --version` now use the shared release version injected by the build instead of stale hard-coded values.
+- Added command-level regression tests for native worker and scanner version stamping.
+
 ## [1.9.1] - 2026-11-13
 
 ### Added
@@ -95,7 +101,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Added
 - **Initial Go worker (Phase 1)**: `go/cmd/lanbus-worker` + `go/internal/worker`, speaking the existing hub protocol. register/claim/progress/log/submit/heartbeat/recover/outbox, streamed logs, prompt composition, git diff/status, inline base64 artifacts.
 - **Native cancellation**: Windows process-tree kill via `taskkill /T`; Unix process-group SIGTERM/SIGKILL. `lan_interrupt` works while the window is unfocused/backgrounded.
-- **Go worker adapters**: claude, codex, kimi, deepseek, shell, echo, custom `--cmd` with `{prompt_file}`.
+- **Go worker adapters**: claude, codex, kimi, deepseek, shell, echo, custom `--cmd` with `{prompt_file}` substitution or stdin delivery.
 - **Cross-built worker binaries**: Windows amd64, macOS arm64/amd64, Linux amd64.
 - **Go tests** for the worker artifact glob matcher and scanner.
 - **CI** builds/tests the Go scanner and worker.
@@ -119,7 +125,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ## [1.2.1] - 2026-11-04
 
 ### Added
-- **`lan_interrupt`** MCP tool + `lanbus interrupt` CLI: explicit Ctrl+C-equivalent for lanbus tasks. It uses the worker cancellation path and kills the whole process tree, independent of window focus/background state.
+- **`lan_interrupt`** MCP tool + `lanbus interrupt` CLI: explicit Ctrl+C-equivalent for lanbus tasks. It uses the worker cancellation path and kills the whole process tree (`taskkill /T` on Windows, process group on POSIX). A late `/worker/submit` is rejected, so a cancelled task cannot be resurrected as `submitted`/`failed`.
 - **Kimi worker adapter**: `--agent kimi` uses `lanbus.prompt_cli` to pass the prompt file as one argv to `kimi -p`, avoiding shell quoting and newline issues on Windows/macOS.
 - **DeepSeek worker adapter**: `--agent deepseek` uses `dsh headless -` over stdin.
 - **macOS worker templates**: `examples/macos/com.lanbus.worker.plist`, `com.lanbus.worker-go.plist`, and `start-worker.sh`.
@@ -138,7 +144,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - **MCP tools**: `lan_discover` (local or `env`-remote via `kind=discover`) and `lan_ask` (prompt a discovered Ollama/OpenAI-compatible endpoint without installing anything there; `env` runs from that worker's network).
 - **CLI**: `lanbus discover [--cidr] [--ports] [--deep] [--json] [--watch]`, `lanbus ask --endpoint ... --prompt ...`.
 - **Worker capability `discover`**: discovery runs inside a worker and uploads the full `discovery.json` artifact; `required_caps` prevents old workers from claiming it.
-- **Per-worker tokens** (`--worker-tokens` / `--worker-tokens-file`) and worker-restart `previous_task` force recovery.
+- **Per-worker tokens** (`--worker-tokens` / `LANBUS_WORKER_TOKEN`) and worker-restart `previous_task` force recovery.
 - **Tests**: 6 discovery tests (fake Ollama/OpenAI/MCP/lanbus services, MCP scan, direct ask, remote worker scan).
 
 ### Changed
