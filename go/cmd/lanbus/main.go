@@ -35,6 +35,8 @@ func main() {
 		err = healthcheck(args)
 	case "peer-ui":
 		err = peerUI(args, openBrowser)
+	case "console":
+		err = consoleCmd(args, openBrowser)
 	case "backup":
 		err = backupCmd(args)
 	case "restore":
@@ -61,6 +63,7 @@ Usage:
   lanbus version                          print version
   lanbus healthcheck [--url URL]          probe hub /health (exit 0=ok)
   lanbus peer-ui --name NAME [--data-dir DIR]
+  lanbus console --name NAME [--data-dir DIR]   open the command console
   lanbus backup [--data-dir DIR] [--out FILE]
   lanbus restore [--data-dir DIR] ARCHIVE
   lanbus daemon install|uninstall|status [--name N] [--exe PATH]
@@ -74,25 +77,45 @@ func defaultDataDir() string {
 }
 
 func peerUI(args []string, opener func(string) error) error {
-	fs := flag.NewFlagSet("peer-ui", flag.ContinueOnError)
+	return openPeerPage(args, opener, "ui")
+}
+
+func consoleCmd(args []string, opener func(string) error) error {
+	return openPeerPage(args, opener, "console")
+}
+
+// openPeerPage opens a loopback peer page ("ui" = approval, "console" = command
+// console). The approval secret travels in the URL fragment, never to the server.
+func openPeerPage(args []string, opener func(string) error, kind string) error {
+	fs := flag.NewFlagSet(kind, flag.ContinueOnError)
 	name := fs.String("name", "", "direct peer name")
 	dataDir := fs.String("data-dir", "", "peer data directory")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *name == "" || *name == "." || *name == ".." || filepath.IsAbs(*name) || strings.ContainsAny(*name, `/\\`) {
-		return fmt.Errorf("peer-ui: --name must be a single peer directory name")
+		return fmt.Errorf("%s: --name must be a single peer directory name", kind)
 	}
 	dir := *dataDir
 	if dir == "" {
 		dir = filepath.Join(defaultDataDir(), "peers", *name)
 	}
-	approvalURL, err := peerui.ApprovalURL(dir)
+	var pageURL string
+	var err error
+	if kind == "console" {
+		pageURL, err = peerui.ConsoleURL(dir)
+	} else {
+		pageURL, err = peerui.ApprovalURL(dir)
+	}
 	if err != nil {
 		return err
 	}
-	fmt.Printf("审批页面：%s（密钥经 URL 片段自动带入，不会发往服务器）\n", strings.Split(approvalURL, "#")[0])
-	return opener(approvalURL)
+	label := "审批页面"
+	if kind == "console" {
+		label = "指挥台"
+	}
+	fmt.Printf("%s：%s（密钥经 URL 片段自动带入，不会发往服务器）\n", label, strings.Split(pageURL, "#")[0])
+	return opener(pageURL)
 }
 
 func openBrowser(rawURL string) error {

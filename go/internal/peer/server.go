@@ -267,6 +267,49 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		w.Write([]byte(approvalHTML))
 		return
+	case r.Method == "GET" && path == "/peer/console":
+		remoteIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if !isLoopback(remoteIP) {
+			status, value = 403, map[string]any{"error": "指挥台只能在本机打开"}
+			break
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(200)
+		w.Write([]byte(consoleHTML))
+		return
+	case r.Method == "GET" && path == "/peer/console/locals":
+		if !s.consoleAuth(r) {
+			status, value = 403, map[string]any{"error": "只能在本机使用指挥台"}
+			break
+		}
+		status, value = s.consoleLocals()
+	case r.Method == "POST" && strings.HasPrefix(path, "/peer/console/"):
+		if !s.consoleAuth(r) {
+			status, value = 403, map[string]any{"error": "只能在本机使用指挥台"}
+			break
+		}
+		body, err := readBody(r)
+		if err != nil {
+			status, value = 400, map[string]any{"error": err.Error()}
+			break
+		}
+		switch path {
+		case "/peer/console/discover":
+			status, value = s.consoleDiscover(body)
+		case "/peer/console/pair":
+			status, value = s.consolePair(body)
+		case "/peer/console/pair-status":
+			status, value = s.consolePairStatus(body)
+		case "/peer/console/send":
+			status, value = s.consoleSend(body)
+		case "/peer/console/history":
+			status, value = s.consoleHistory(body)
+		case "/peer/console/reset":
+			status, value = s.consoleReset(body)
+		default:
+			status, value = 404, map[string]any{"error": "not found"}
+		}
 	case r.Method == "GET" && path == "/peer/pair/status":
 		status, value = s.status(r.URL.Query())
 	case r.Method == "GET" && path == "/peer/inbox":

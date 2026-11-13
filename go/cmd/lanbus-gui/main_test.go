@@ -3,9 +3,15 @@
 package main
 
 import (
+	"io"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/CozeraVan/lanbus/go/internal/consoleproxy"
+	"github.com/CozeraVan/lanbus/go/internal/peer"
 )
 
 func TestPeerUIEntries(t *testing.T) {
@@ -45,5 +51,44 @@ func TestPeerUIEntries(t *testing.T) {
 func TestPeerUIEntriesMissingDir(t *testing.T) {
 	if entries := peerUIEntries(t.TempDir()); len(entries) != 0 {
 		t.Fatalf("expected 0 entries for missing dir, got %d", len(entries))
+	}
+}
+
+// TestProxyHandlerDelegatesConsole verifies the desktop shell routes /console to
+// the consoleproxy: launcher, injected-base console page, and secret-injected API
+// proxying, all against a real local peer.
+func TestProxyHandlerDelegatesConsole(t *testing.T) {
+	home := t.TempDir()
+	s, err := peer.NewServer(peer.ServerConfig{
+		Name: "alpha", DataDir: filepath.Join(home, ".lanbus", "peers", "alpha"),
+		Port: 0, RequestPolicy: "pair",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Start()
+	t.Cleanup(s.Stop)
+	h := &proxyHandler{console: &consoleproxy.Handler{Home: home}}
+
+	req := httptest.NewRequest("GET", "/console", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "/console/alpha") {
+		t.Fatalf("launcher code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest("GET", "/console/alpha", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `__LANBUS_BASE__="/console/alpha"`) {
+		t.Fatalf("console page code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest("GET", "/console/alpha/peer/console/locals", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	body, _ := io.ReadAll(rec.Result().Body)
+	if rec.Code != 200 || !strings.Contains(string(body), "alpha") {
+		t.Fatalf("proxied api code=%d body=%s", rec.Code, string(body))
 	}
 }

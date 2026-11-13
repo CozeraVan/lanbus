@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lanbus · 指挥台</title>
+<style>
+:root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#2f81f7;--ok:#3fb950;--warn:#d29922;--bad:#f85149}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;gap:12px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line);background:#010409;position:sticky;top:0;z-index:5}
+h1{font-size:17px;margin:0}.sp{flex:1}
+input,textarea,button,select{font:inherit;color:var(--text);background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+button{cursor:pointer;background:#21262d}button:hover{border-color:var(--accent)}button.primary{background:var(--accent);border-color:var(--accent);color:#fff}button:disabled{opacity:.5;cursor:not-allowed}
+textarea{width:100%;min-height:72px;resize:vertical}input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
+.layout{display:grid;grid-template-columns:340px minmax(0,1fr);min-height:calc(100vh - 57px)}
+aside{border-right:1px solid var(--line);padding:14px;overflow:auto;max-height:calc(100vh - 57px);position:sticky;top:57px}
+main{padding:18px 22px;display:flex;flex-direction:column;max-width:1000px}
+@media(max-width:900px){.layout{display:block}aside{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}}
+.k{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.8px}.muted{color:var(--muted)}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
+.small{font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;background:#21262d;color:var(--muted);font-size:12px;margin:2px 4px 2px 0}
+.pill.on,.pill.approved{color:var(--ok)}.pill.pending{color:var(--warn)}.pill.denied,.pill.expired{color:var(--bad)}
+.tgt{display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid var(--line);border-radius:9px;margin:6px 0;background:#0d1117}
+.tgt label{flex:1;cursor:pointer}.tgt .st{font-size:12px}
+.step{display:flex;gap:6px;align-items:center;margin:4px 0}.step .n{width:20px;height:20px;border-radius:50%;background:#21262d;color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:12px;flex:none}
+.step.active .n{background:var(--accent);color:#fff}
+#tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+#tabs button{padding:5px 12px}#tabs button.active{border-color:var(--accent);background:#1f6feb22}
+#dialog{flex:1;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--panel);min-height:280px;max-height:calc(100vh - 280px)}
+.msg{margin:10px 0;max-width:85%}.msg .who{font-size:12px;color:var(--muted);margin-bottom:3px;display:flex;gap:8px;align-items:center}
+.copybtn,.togglebtn{font-size:11px;padding:1px 8px;background:#21262d;border:1px solid var(--line);border-radius:6px;color:var(--muted);cursor:pointer}
+.copybtn:hover,.togglebtn:hover{border-color:var(--accent);color:var(--text)}.togglebtn{margin-top:6px}
+.msg .bubble{padding:9px 12px;border-radius:12px;white-space:pre-wrap;word-break:break-word}
+.msg.out{margin-left:auto}.msg.out .bubble{background:#1f6feb33;border:1px solid #1f6feb55}
+.msg.in .bubble{background:#21262d;border:1px solid var(--line)}
+.msg.sys{max-width:100%}.msg.sys .bubble{background:transparent;border:1px dashed var(--line);color:var(--muted);font-size:12px}
+.err{color:var(--bad);white-space:pre-wrap}
+.toast{position:fixed;right:18px;bottom:18px;background:#21262d;border:1px solid var(--line);padding:10px 14px;border-radius:10px;display:none;max-width:420px;z-index:9}.toast.show{display:block}
+.busy{opacity:.6;pointer-events:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>lanbus 指挥台</h1><span class="muted small" id="health">…</span><span class="sp"></span>
+  <span class="muted small" id="who"></span>
+</header>
+<div class="layout">
+<aside>
+  <div class="step active" id="step1"><span class="n">1</span><span class="k">嗅探 agent</span></div>
+  <div class="card">
+    <div class="row"><button class="primary" id="scanBtn" onclick="discover()">嗅探本机 / 局域网</button><button class="small" onclick="loadLocals()">刷新本机</button></div>
+    <div class="row" style="margin-top:8px"><input id="cidr" placeholder="可选 CIDR，如 192.168.1.0/24" style="flex:1"></div>
+    <div id="scanInfo" class="muted small" style="margin-top:8px">点击嗅探发现本机与局域网内的 AI agent。</div>
+  </div>
+
+  <div class="step" id="step2"><span class="n">2</span><span class="k">选择本机操控 agent</span></div>
+  <div class="card">
+    <select id="controller" style="width:100%" onchange="onController()"></select>
+    <div class="muted small" style="margin-top:6px">操控者用其本机身份向目标发起请求。</div>
+  </div>
+
+  <div class="step" id="step3"><span class="n">3</span><span class="k">选择目标 agent（可多选）</span></div>
+  <div class="card"><div id="targets" class="muted small">先嗅探或刷新本机。</div></div>
+
+  <div class="step" id="step4"><span class="n">4</span><span class="k">发送确认请求</span></div>
+  <div class="card">
+    <button class="primary" id="pairBtn" onclick="pairAll()" style="width:100%">向所选目标发送确认请求</button>
+    <div id="pairStatus" class="muted small" style="margin-top:8px"></div>
+  </div>
+
+  <div class="step" id="step5"><span class="n">5</span><span class="k">目标人工同意 → 对话</span></div>
+  <div class="card muted small">目标机器会弹出审批通知；本机目标可用 <span class="mono">lanbus peer-ui --name &lt;名称&gt;</span> 打开审批页。批准后即可在右侧对话框发送消息。</div>
+</aside>
+<main>
+  <div id="tabs"></div>
+  <div id="dialog"><div class="muted small">完成左侧 1–5 步后，这里显示操控者与目标 agent 的对话。</div></div>
+  <div class="card" style="margin-top:12px">
+    <textarea id="msg" placeholder="输入要传输给目标 agent 的信息…（Ctrl+Enter 发送）"></textarea>
+    <div class="row" style="margin-top:8px">
+      <label class="small muted" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="ctxToggle" checked onchange="onCtxToggle()"> 携带上下文</label>
+      <label class="small muted" style="display:flex;gap:6px;align-items:center">轮数 <input type="number" id="ctxTurns" min="1" max="64" value="16" style="width:70px" onchange="onCtxTurns()"></label>
+    </div>
+    <div class="row" style="margin-top:8px"><button class="primary" id="sendBtn" onclick="sendMsg()" disabled>发送</button><button id="resetBtn" onclick="resetConv()" title="清空当前目标的对话记录">清空对话</button><span id="busy" class="muted small"></span></div>
+  </div>
+</main>
+</div>
+<div id="toast" class="toast"></div>
+<script>
+const $=s=>document.querySelector(s);
+// API base is empty when served standalone by the peer; the desktop window's
+// consoleproxy injects window.__LANBUS_BASE__="/console/<name>" and adds the
+// approval secret server-side, so the embedded page needs no URL fragment.
+const API_BASE=window.__LANBUS_BASE__||'';
+const state={controller:null, targets:{}, active:null};
+// Secret arrives via URL fragment, never sent to the server except as a header.
+(function(){const m=location.hash.match(/secret=([^&]+)/);if(m){sessionStorage.setItem('lanbus_console',decodeURIComponent(m[1]));history.replaceState(null,'',location.pathname)}})();
+function secret(){return sessionStorage.getItem('lanbus_console')||''}
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),4000)}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+async function api(path,body){const opt={headers:{'X-Lanbus-Approval':secret(),'Content-Type':'application/json'}};if(body!==undefined){opt.method='POST';opt.body=JSON.stringify(body)}const r=await fetch(API_BASE+path,opt);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||(r.status+' '+r.statusText));return j}
+function setStep(n){for(let i=1;i<=5;i++)$('#step'+i).classList.toggle('active',i<=n)}
+
+async function loadHealth(){try{const j=await (await fetch(API_BASE+'/peer/health')).json();$('#health').textContent=(j.display_name||j.name||'peer')+' · '+(j.request_policy||'');$('#who').textContent=j.agent||''}catch(e){$('#health').textContent='离线'}}
+
+async function loadLocals(){try{const j=await api('/peer/console/locals');window._locals=j.locals||[];const sel=$('#controller');const prev=sel.value;sel.innerHTML='';(j.locals||[]).forEach(l=>{const o=document.createElement('option');o.value=l.name;o.textContent=(l.display_name||l.name)+(l.online?'':'（离线）')+(l.agent?' · '+l.agent:'');o.disabled=!l.online;sel.appendChild(o)});if(prev&&[...sel.options].some(o=>o.value===prev))sel.value=prev;onController();
+  // local peers are also candidate targets
+  (j.locals||[]).forEach(l=>{if(l.online)addTarget({name:l.display_name||l.name,url:l.url,kind:'local',agent:l.agent})});
+  renderTargets();if(!state.controller)setStep(1);else setStep(2)}catch(e){toast(e.message)}}
+
+function onController(){state.controller=$('#controller').value||null;renderTargets();if(state.controller)setStep(2)}
+
+function addTarget(t){if(!t.url)return;if(state.targets[t.url])return;state.targets[t.url]={name:t.name||t.url,url:t.url,kind:t.kind||'lan',agent:t.agent||'',status:'new',request_id:null,messages:[],historyLoaded:false,context:true,maxTurns:16}}
+
+async function discover(){const btn=$('#scanBtn');btn.disabled=true;$('#scanInfo').textContent='嗅探中…（扫描本机与局域网端口）';try{const body={include_local:true,include_processes:true};const cidr=$('#cidr').value.trim();if(cidr)body.cidr=cidr;const j=await api('/peer/console/discover',body);let n=0;(j.agents||[]).forEach(a=>{if(a.kind==='lanbus-peer'&&a.endpoint){addTarget({name:(a.name||a.hostname||a.endpoint)+(a.agent?' · '+a.agent:''),url:a.endpoint,kind:'lan',agent:a.agent});n++}});
+  const la=(j.local_agents||[]).length;$('#scanInfo').innerHTML='发现 <b>'+n+'</b> 个局域网 lanbus peer，<b>'+la+'</b> 类本机 agent 进程。'+(j.notes&&j.notes[0]?'<br>'+esc(j.notes[0]):'');
+  renderTargets();setStep(Math.max(2,stepFromState()));toast('嗅探完成')}catch(e){$('#scanInfo').innerHTML='<span class="err">'+esc(e.message)+'</span>'}finally{btn.disabled=false}}
+
+function stepFromState(){const ts=Object.values(state.targets);if(ts.some(t=>t.status==='approved'))return 5;if(ts.some(t=>t.status==='pending'))return 4;if(state.controller&&ts.length)return 3;return 2}
+
+function renderTargets(){const box=$('#targets');const ctrlUrl=controllerUrl();const list=Object.values(state.targets).filter(t=>t.url!==ctrlUrl);
+  if(!list.length){box.innerHTML='<span class="muted">先嗅探或刷新本机。</span>';return}
+  box.innerHTML='';list.forEach(t=>{const d=document.createElement('div');d.className='tgt';const cb=document.createElement('input');cb.type='checkbox';cb.dataset.url=t.url;cb.checked=t.selected||false;cb.onchange=()=>{t.selected=cb.checked};const lab=document.createElement('label');lab.innerHTML='<div>'+esc(t.name)+'</div><div class="muted small mono">'+esc(t.url)+'</div><div class="st">'+statusPill(t)+'</div>';d.appendChild(cb);d.appendChild(lab);box.appendChild(d)});
+  $('#pairBtn').disabled=!state.controller||!list.some(t=>t.selected)}
+
+function controllerUrl(){const l=(window._locals||[]).find(x=>x.name===state.controller);return l?l.url:null}
+
+function statusPill(t){const map={new:'待请求',pending:'待目标同意',approved:'已批准',denied:'已拒绝',expired:'已过期',failed:'失败'};return '<span class="pill '+t.status+'">'+(map[t.status]||t.status)+'</span>'}
+
+async function pairAll(){if(!state.controller){toast('请先选择操控者');return}const sel=Object.values(state.targets).filter(t=>t.selected&&t.url!==controllerUrl());if(!sel.length){toast('请勾选至少一个目标');return}
+  $('#pairBtn').disabled=true;setStep(4);const ps=$('#pairStatus');ps.innerHTML='';
+  for(const t of sel){try{const j=await api('/peer/console/pair',{controller:state.controller,target_url:t.url,message:'lanbus 指挥台请求对话',scope:'chat'});t.status=j.status==='approved'?'approved':'pending';t.request_id=j.request_id;appendSys(t,'已发送确认请求 '+ (t.request_id||'') +'，等待目标人工同意。');if(t.status==='approved'){appendSys(t,'目标已自动批准（公司成员）。');}else{pollPair(t)}}catch(e){t.status='failed';appendSys(t,'发送失败：'+e.message)}renderTargets();renderTabs()}
+  $('#pairBtn').disabled=false;ps.textContent='已发送，等待目标批准…'}
+
+async function pollPair(t){for(let i=0;i<200;i++){await new Promise(r=>setTimeout(r,1500));try{const j=await api('/peer/console/pair-status',{controller:state.controller,target_url:t.url,request_id:t.request_id});const st=j.status;if(st==='approved'){t.status='approved';appendSys(t,'目标已同意，可以开始对话。');renderTargets();renderTabs();setStep(5);return}if(st==='denied'||st==='expired'){t.status=st;appendSys(t,'目标'+(st==='denied'?'拒绝':'审批过期')+'。');renderTargets();return}}catch(e){/* keep polling */}}t.status='expired';appendSys(t,'等待目标批准超时。');renderTargets()}
+
+function renderTabs(){const tabs=$('#tabs');tabs.innerHTML='';const approved=Object.values(state.targets).filter(t=>t.status==='approved');approved.forEach(t=>{const b=document.createElement('button');b.textContent=t.name;b.className=state.active===t.url?'active':'';b.onclick=()=>{state.active=t.url;renderTabs();renderDialog();$('#sendBtn').disabled=false};tabs.appendChild(b)});if(!state.active&&approved.length){state.active=approved[0].url;$('#sendBtn').disabled=false}if(state.active)renderDialog()}
+
+function renderDialog(){const box=$('#dialog');const t=state.targets[state.active];if(!t){box.innerHTML='<div class="muted small">选择一个已批准的目标。</div>';return}
+  syncCtxControls();
+  if(!t.historyLoaded){t.historyLoaded=true;loadHistory(t);return}
+  box.innerHTML='';if(!t.messages.length){box.innerHTML='<div class="muted small">与 '+esc(t.name)+' 的多轮对话（自动携带上下文）。输入信息并发送。</div>'}t.messages.forEach((m,idx)=>box.appendChild(renderMsg(t,m,idx)));box.scrollTop=box.scrollHeight}
+
+// renderMsg builds one bubble with a copy button and collapses long replies.
+// Text is set via textContent (never innerHTML) so agent output cannot inject HTML.
+function renderMsg(t,m,idx){const d=document.createElement('div');d.className='msg '+m.dir;
+  const who=m.dir==='out'?('操控者 → '+esc(t.name)):(m.dir==='in'?esc(t.name):'系统');
+  const head=document.createElement('div');head.className='who';head.innerHTML='<span>'+who+'</span>';
+  if(m.dir!=='sys'){const cp=document.createElement('button');cp.className='copybtn';cp.textContent='复制';cp.onclick=()=>copyMsg(idx);head.appendChild(cp)}
+  d.appendChild(head);
+  const bub=document.createElement('div');bub.className='bubble';
+  const long=m.text.length>800;const txt=document.createElement('span');
+  txt.textContent=(long&&!m.expanded)?(m.text.slice(0,300)+' …'):m.text;
+  bub.appendChild(txt);
+  if(long){const tg=document.createElement('button');tg.className='togglebtn';tg.textContent=m.expanded?'收起':'展开（'+m.text.length+' 字符）';tg.onclick=()=>{m.expanded=!m.expanded;renderDialog()};bub.appendChild(document.createElement('br'));bub.appendChild(tg)}
+  d.appendChild(bub);return d}
+
+async function copyMsg(idx){const t=state.targets[state.active];if(!t||!t.messages[idx])return;const text=t.messages[idx].text;
+  try{await navigator.clipboard.writeText(text);toast('已复制')}
+  catch(e){const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();try{document.execCommand('copy');toast('已复制')}catch(_){toast('复制失败，请手动选择')}ta.remove()}}
+
+// loadHistory restores the persisted conversation once per target so the dialog
+// survives page reloads; the backend keeps the transcript per controller/target.
+async function loadHistory(t){try{const j=await api('/peer/console/history',{controller:state.controller,target_url:t.url});t.messages=(j.turns||[]).map(m=>({dir:m.role==='agent'?'in':'out',text:m.text}));if(typeof j.context==='boolean')t.context=j.context;if(j.max_turns)t.maxTurns=j.max_turns}catch(e){t.messages=[{dir:'sys',text:'加载历史失败：'+e.message}]}if(state.active===t.url)renderDialog()}
+
+async function resetConv(){const t=state.targets[state.active];if(!t){toast('请先选择已批准的目标');return}if(!confirm('清空与 '+t.name+' 的对话记录？下一条消息将不再携带上下文。'))return;try{await api('/peer/console/reset',{controller:state.controller,target_url:t.url});t.messages=[];t.historyLoaded=true;renderDialog();toast('已清空对话')}catch(e){toast(e.message)}}
+
+function onCtxToggle(){const t=state.targets[state.active];if(t)t.context=$('#ctxToggle').checked}
+function onCtxTurns(){const t=state.targets[state.active];if(!t)return;let n=parseInt($('#ctxTurns').value,10);if(!(n>=1))n=16;if(n>64)n=64;t.maxTurns=n;$('#ctxTurns').value=n}
+function syncCtxControls(){const t=state.targets[state.active];$('#ctxToggle').checked=t?t.context!==false:true;$('#ctxTurns').value=t&&t.maxTurns?t.maxTurns:16}
+
+function appendSys(t,text){t.messages.push({dir:'sys',text});if(state.active===t.url&&t.historyLoaded)renderDialog()}
+
+async function sendMsg(){const t=state.targets[state.active];if(!t){toast('请先选择已批准的目标');return}const msg=$('#msg').value.trim();if(!msg){toast('请输入信息');return}
+  t.messages.push({dir:'out',text:msg});$('#msg').value='';renderDialog();$('#sendBtn').disabled=true;$('#busy').textContent='发送中…（等待目标执行）';
+  try{const j=await api('/peer/console/send',{controller:state.controller,target_url:t.url,message:msg,scope:'chat',context:t.context!==false,max_turns:t.maxTurns||16});const reply=j.reply||'(无回复)';t.messages.push({dir:'in',text:reply+(j.exit_code?('\\n[exit '+j.exit_code+']'):'')});}
+  catch(e){t.messages.push({dir:'sys',text:'发送失败：'+e.message});if(/尚未配对/.test(e.message)){t.status='new';renderTargets()}}
+  finally{$('#sendBtn').disabled=false;$('#busy').textContent='';renderDialog()}}
+
+$('#msg').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();sendMsg()}});
+(async function init(){await loadHealth();if(!secret()&&!API_BASE){$('#scanInfo').innerHTML='<span class="err">缺少审批密钥：请通过 lanbus console 或托盘打开（URL 片段自动带入）。</span>';return}await loadLocals();setStep(1)})();
+</script>
+</body>
+</html>
