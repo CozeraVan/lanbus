@@ -13,6 +13,13 @@ lanbus has two complementary modes:
 
 Zero mandatory dependencies. Standard library only. Never leaves your LAN. Optional Playwright unlocks real browser actions; Chrome/Edge headless gives fallback screenshots. A built-in scanner finds AI agents already running on the LAN **without installing anything on them**.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-modes-dark.png">
+  <img alt="lanbus two modes: a symmetric encrypted peer mesh (direct company network) and a hub-and-spoke orchestration loop with evidence-based review" src="docs/images/architecture-modes-light.png">
+</picture>
+
+*The two modes at a glance: the default direct company network is a symmetric, encrypted peer mesh with no hub; hub mode is a central queue where workers pull tasks and results are accepted or sent back for rework based on real evidence (exit code, git diff, artifacts).*
+
 ```
 Direct company network (no hub)          Hub mode (task orchestration)
 

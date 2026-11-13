@@ -13,6 +13,13 @@ lanbus 现在有两种互补模式：
 
 零硬依赖，只用 Python 标准库，不出局域网。可选 Playwright 解锁真实浏览器动作；本机 Chrome/Edge 提供降级截图。内置扫描器可以在**不往对方机器装任何东西**的前提下，发现局域网里已经打开的 AI agent。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-modes-dark.png">
+  <img alt="lanbus 两种模式：直连公司成员网络（对称加密 peer 网状）与 Hub 编排（星型派单 + 证据验收回路）的 agent 关系与信息流" src="docs/images/architecture-modes-light.png">
+</picture>
+
+*两种模式一览：默认的直连公司成员网络是无中心、对称加密的 peer 网状网；Hub 模式是中心队列派单，worker 主动拉取，按真实证据（退出码、git diff、产物）决定通过或打回重做。*
+
 ```
 直连公司成员网络（无 Hub）              Hub 模式（任务编排）
 
