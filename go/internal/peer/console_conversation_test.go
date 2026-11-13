@@ -241,6 +241,47 @@ func TestConsoleContextToggle(t *testing.T) {
 	}
 }
 
+// TestConsoleSettingsPersist proves context/max_turns are stored per conversation,
+// reported by history, and honored when a later send omits them.
+func TestConsoleSettingsPersist(t *testing.T) {
+	root := t.TempDir()
+	host := newConsolePeer(t, root, "host", "pair", nil)
+	var mu sync.Mutex
+	var received []string
+	target := newConsolePeer(t, root, "target", "pair", func(message, scope, cwd string, timeout float64) map[string]any {
+		mu.Lock()
+		received = append(received, message)
+		mu.Unlock()
+		return map[string]any{"ok": true, "exit_code": 0, "reply": "ack", "peer": "target"}
+	})
+	consolePairApprove(t, host, target)
+
+	// First send stores context:false, max_turns:3.
+	consoleReq(t, "POST", host.URL+"/peer/console/send", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL, "message": "hello", "scope": "chat", "context": false, "max_turns": 3})
+
+	code, out := consoleReq(t, "POST", host.URL+"/peer/console/history", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL})
+	if code != 200 {
+		t.Fatalf("history code=%d out=%v", code, out)
+	}
+	if ctx, _ := out["context"].(bool); ctx {
+		t.Fatalf("expected persisted context=false, got %v", out["context"])
+	}
+	if mt := asFloat(out["max_turns"]); mt != 3 {
+		t.Fatalf("expected persisted max_turns=3, got %v", out["max_turns"])
+	}
+
+	// A later send that omits settings must honor the stored context:false (raw).
+	consoleReq(t, "POST", host.URL+"/peer/console/send", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL, "message": "again", "scope": "chat"})
+	mu.Lock()
+	defer mu.Unlock()
+	if received[len(received)-1] != "again" {
+		t.Fatalf("stored context=false should make an omitted-context send raw, got %q", received[len(received)-1])
+	}
+}
+
 // TestConsoleMaxTurns proves max_turns limits how much history is injected.
 func TestConsoleMaxTurns(t *testing.T) {
 	root := t.TempDir()

@@ -226,20 +226,31 @@ func (s *Server) consoleSend(body map[string]any) (int, any) {
 	// prepend the stored conversation history to each new message. The first
 	// turn (no history) is sent unchanged, preserving one-shot behavior.
 	convKey := targetURL
-	priorTurns := convTurns(loadConversations(dir), convKey)
+	convs := loadConversations(dir)
+	conv, _ := convs[convKey].(map[string]any)
+	priorTurns := convTurns(convs, convKey)
+	// Effective settings: request overrides stored, stored overrides default.
 	// Context is on by default; context:false sends a clean one-shot message.
 	// The exchange is recorded either way so history stays complete.
+	carry := asBool(body["context"], storedContext(conv))
+	maxTurns := int(asFloat(body["max_turns"]))
+	if maxTurns <= 0 {
+		maxTurns = storedMaxTurns(conv)
+	}
+	if maxTurns > consoleMaxTurnsHard {
+		maxTurns = consoleMaxTurnsHard
+	}
 	outgoing := message
-	if asBool(body["context"], true) {
-		outgoing = buildContextMessage(priorTurns, message, int(asFloat(body["max_turns"])))
+	if carry {
+		outgoing = buildContextMessage(priorTurns, message, maxTurns)
 	}
 	result, err := client.RequestV2(grant, outgoing, scope, asString(body["cwd"]), timeout, statusTimeout)
 	if err != nil {
 		return 502, map[string]any{"error": err.Error()}
 	}
 	// Record the clean exchange (original user text, not the context-expanded
-	// prompt) so history never compounds prior context blobs.
-	recordExchange(dir, convKey, targetURL, scope, message, asString(result["reply"]))
+	// prompt) so history never compounds prior context blobs, and persist settings.
+	recordExchange(dir, convKey, targetURL, scope, message, asString(result["reply"]), carry, maxTurns)
 	result["conversation_turns"] = PyFloat(float64(len(priorTurns) + 2))
 	return 200, result
 }
@@ -255,11 +266,16 @@ func (s *Server) consoleHistory(body map[string]any) (int, any) {
 	if key == "" {
 		return 400, map[string]any{"error": "缺少 target_url"}
 	}
-	turns := convTurns(loadConversations(dir), key)
+	convs := loadConversations(dir)
+	conv, _ := convs[key].(map[string]any)
+	turns := convTurns(convs, key)
 	if turns == nil {
 		turns = []any{}
 	}
-	return 200, map[string]any{"target_url": key, "turns": turns}
+	return 200, map[string]any{
+		"target_url": key, "turns": turns,
+		"context": storedContext(conv), "max_turns": PyFloat(float64(storedMaxTurns(conv))),
+	}
 }
 
 // consoleReset clears a conversation so the next message starts fresh.
@@ -317,7 +333,7 @@ func convTurns(convs map[string]any, key string) []any {
 	return turns
 }
 
-func recordExchange(dir, key, targetURL, scope, userText, agentText string) {
+func recordExchange(dir, key, targetURL, scope, userText, agentText string, carry bool, maxTurns int) {
 	convs := loadConversations(dir)
 	conv, _ := convs[key].(map[string]any)
 	if conv == nil {
@@ -330,9 +346,34 @@ func recordExchange(dir, key, targetURL, scope, userText, agentText string) {
 	conv["target_url"] = targetURL
 	conv["scope"] = scope
 	conv["turns"] = turns
+	conv["context"] = carry
+	conv["max_turns"] = PyFloat(float64(maxTurns))
 	conv["updated_at"] = ts
 	convs[key] = conv
 	_ = saveConversations(dir, convs)
+}
+
+// storedContext returns a conversation's persisted context toggle (default on).
+func storedContext(conv map[string]any) bool {
+	if conv == nil {
+		return true
+	}
+	return asBool(conv["context"], true)
+}
+
+// storedMaxTurns returns a conversation's persisted turn limit (default 16, clamped).
+func storedMaxTurns(conv map[string]any) int {
+	if conv == nil {
+		return consoleMaxTurns
+	}
+	n := int(asFloat(conv["max_turns"]))
+	if n <= 0 {
+		return consoleMaxTurns
+	}
+	if n > consoleMaxTurnsHard {
+		return consoleMaxTurnsHard
+	}
+	return n
 }
 
 func truncateRunes(s string, n int) string {

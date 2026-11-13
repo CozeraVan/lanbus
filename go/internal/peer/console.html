@@ -141,7 +141,7 @@ function renderDialog(){const box=$('#dialog');const t=state.targets[state.activ
 
 // loadHistory restores the persisted conversation once per target so the dialog
 // survives page reloads; the backend keeps the transcript per controller/target.
-async function loadHistory(t){try{const j=await api('/peer/console/history',{controller:state.controller,target_url:t.url});t.messages=(j.turns||[]).map(m=>({dir:m.role==='agent'?'in':'out',text:m.text}))}catch(e){t.messages=[{dir:'sys',text:'加载历史失败：'+e.message}]}if(state.active===t.url)renderDialog()}
+async function loadHistory(t){try{const j=await api('/peer/console/history',{controller:state.controller,target_url:t.url});t.messages=(j.turns||[]).map(m=>({dir:m.role==='agent'?'in':'out',text:m.text}));if(typeof j.context==='boolean')t.context=j.context;if(j.max_turns)t.maxTurns=j.max_turns}catch(e){t.messages=[{dir:'sys',text:'加载历史失败：'+e.message}]}if(state.active===t.url)renderDialog()}
 
 async function resetConv(){const t=state.targets[state.active];if(!t){toast('请先选择已批准的目标');return}if(!confirm('清空与 '+t.name+' 的对话记录？下一条消息将不再携带上下文。'))return;try{await api('/peer/console/reset',{controller:state.controller,target_url:t.url});t.messages=[];t.historyLoaded=true;renderDialog();toast('已清空对话')}catch(e){toast(e.message)}}
 
