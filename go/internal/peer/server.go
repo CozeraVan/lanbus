@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -28,32 +29,40 @@ const (
 type ExecutorFunc func(message, scope, cwd string, timeout float64) map[string]any
 
 type ServerConfig struct {
-	Name     string
-	Agent    string
-	CWD      string
-	Command  string
-	DataDir  string
-	Host     string
-	Port     int
-	Executor ExecutorFunc
+	Name          string
+	DisplayName   string
+	InstanceLabel string
+	RequestPolicy string
+	Agent         string
+	CWD           string
+	Command       string
+	DataDir       string
+	Host          string
+	Port          int
+	Executor      ExecutorFunc
+	Notifier      func(Notification)
 }
 
 type Server struct {
 	cfg            ServerConfig
 	Identity       *Identity
 	Grants         *GrantStore
+	Company        *Company
 	approvalSecret string
 	cwd            string
 	bindHost       string
 	Port           int
 	URL            string
 
-	mu           sync.Mutex
-	pending      map[string]map[string]any
-	completed    map[string]map[string]any
-	seenRequests map[string]bool
-	pairNonces   map[string]bool
-	rate         map[string][]float64
+	mu                 sync.Mutex
+	pending            map[string]map[string]any
+	completed          map[string]map[string]any
+	executionPending   map[string]map[string]any
+	executionRunning   map[string]map[string]any
+	executionCompleted map[string]map[string]any
+	seenRequests       map[string]bool
+	pairNonces         map[string]bool
+	rate               map[string][]float64
 
 	http     *http.Server
 	listener net.Listener
@@ -62,6 +71,12 @@ type Server struct {
 func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Host == "" {
 		cfg.Host = "0.0.0.0"
+	}
+	if cfg.DisplayName == "" {
+		cfg.DisplayName = cfg.Name
+	}
+	if cfg.RequestPolicy != "pair" && cfg.RequestPolicy != "each" && cfg.RequestPolicy != "company" {
+		cfg.RequestPolicy = "company"
 	}
 	if cfg.DataDir == "" {
 		home, _ := os.UserHomeDir()
@@ -83,18 +98,26 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	company, err := LoadCompany(cfg.DataDir)
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
-		cfg:            cfg,
-		Identity:       id,
-		Grants:         grants,
-		approvalSecret: secret,
-		cwd:            cwd,
-		bindHost:       cfg.Host,
-		pending:        map[string]map[string]any{},
-		completed:      map[string]map[string]any{},
-		seenRequests:   map[string]bool{},
-		pairNonces:     map[string]bool{},
-		rate:           map[string][]float64{},
+		cfg:                cfg,
+		Identity:           id,
+		Grants:             grants,
+		Company:            company,
+		approvalSecret:     secret,
+		cwd:                cwd,
+		bindHost:           cfg.Host,
+		pending:            map[string]map[string]any{},
+		completed:          map[string]map[string]any{},
+		executionPending:   map[string]map[string]any{},
+		executionRunning:   map[string]map[string]any{},
+		executionCompleted: map[string]map[string]any{},
+		seenRequests:       map[string]bool{},
+		pairNonces:         map[string]bool{},
+		rate:               map[string][]float64{},
 	}
 	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, fmt.Sprint(cfg.Port)))
 	if err != nil {
@@ -169,11 +192,32 @@ func primaryLANIP() string {
 }
 
 func (s *Server) publicPeer(hostHeader string) map[string]any {
+	features := []string{}
+	if s.cfg.RequestPolicy == "each" {
+		features = append(features, "request_v2")
+	}
+	companyID, companyName := "", ""
+	if s.Company != nil {
+		features = append(features, "company_v1")
+		companyID, companyName = s.Company.ID, s.Company.Name
+	}
 	return map[string]any{
 		"name": s.cfg.Name, "agent": s.cfg.Agent, "hostname": hostname(),
 		"peer_id": s.Identity.PeerID, "direct_pairing": true,
+		"display_name": s.cfg.DisplayName, "instance_label": s.cfg.InstanceLabel,
+		"cwd_display": s.cwd, "request_policy": s.cfg.RequestPolicy,
+		"approval_features": features, "company_id": companyID, "company_name": companyName,
 		"endpoint": s.advertisedEndpoint(hostHeader), "scopes": []string{"chat", "project"},
 	}
+}
+
+func (s *Server) notify(requestID, kind, message string) {
+	if s.cfg.Notifier == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	s.cfg.Notifier(Notification{RequestID: requestID, Kind: kind, Message: message,
+		URL: s.URL + "/peer/ui", Secret: s.approvalSecret, Target: s.publicPeer("")})
 }
 
 func (s *Server) advertisedEndpoint(hostHeader string) string {
@@ -271,6 +315,38 @@ func (s *Server) expireLocked() {
 			delete(s.pending, id)
 		}
 	}
+	for id, item := range s.executionPending {
+		if asFloat(item["expires_at"]) < cutoff {
+			item["status"] = "expired"
+			s.executionCompleted[id] = item
+			delete(s.executionPending, id)
+		}
+	}
+}
+
+func (s *Server) makeGrant(pending map[string]any, mode, scope, cwd string) (map[string]any, error) {
+	source, _ := pending["source"].(map[string]any)
+	cwds := []any{}
+	if scope == "project" {
+		cwds = append(cwds, cwd)
+	}
+	targetNonce := make([]byte, 24)
+	rand.Read(targetNonce)
+	grant := map[string]any{
+		"grant_id": randomHex(16), "peer_id": asString(source["peer_id"]),
+		"target_peer_id": s.Identity.PeerID, "mode": mode, "scope": scope, "cwds": cwds,
+		"sign_public": asString(source["sign_public"]), "x_public": asString(source["x_public"]),
+		"target_sign_public": s.Identity.SignPublicB64, "target_x_public": s.Identity.XPublicB64,
+		"source_hostname": asString(source["hostname"]), "source_agent": asString(source["agent"]),
+		"initiator_nonce": asString(pending["nonce"]), "target_nonce": b64(targetNonce),
+		"created_at": PyFloat(now()),
+	}
+	signature, err := s.Identity.Sign(stripKey(grant, "target_signature"))
+	if err != nil {
+		return nil, err
+	}
+	grant["target_signature"] = signature
+	return grant, s.Grants.PutGrant(grant)
 }
 
 func (s *Server) pair(payload map[string]any) (int, any) {
@@ -299,6 +375,28 @@ func (s *Server) pair(payload map[string]any) (int, any) {
 	}
 	if asFloat(payload["expires_at"]) < now() || asFloat(payload["created_at"]) > now()+30 {
 		return 400, map[string]any{"error": "配对申请已过期"}
+	}
+	if asBool(payload["join_company"], false) && s.Company == nil {
+		return 400, map[string]any{"error": "目标尚未加入任何公司"}
+	}
+	if companyID := asString(payload["company_id"]); companyID != "" {
+		if s.Company == nil || companyID != s.Company.ID {
+			return 403, map[string]any{"error": "目标不属于该公司"}
+		}
+		expectedProof := CompanyProof(s.Company.Secret, s.Company.ID, asString(source["peer_id"]), asString(payload["nonce"]))
+		if !hmac.Equal([]byte(expectedProof), []byte(asString(payload["company_proof"]))) {
+			return 403, map[string]any{"error": "公司成员证明无效"}
+		}
+		if s.cfg.RequestPolicy == "company" {
+			grant, err := s.makeGrant(signed, "company", scope, s.cwd)
+			if err != nil {
+				return 500, map[string]any{"error": err.Error()}
+			}
+			return 200, map[string]any{"status": "approved", "request_id": "company-" + randomHex(8), "grant": grant}
+		}
+	}
+	if asBool(payload["join_company"], false) {
+		signed["kind"] = "company"
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -347,6 +445,7 @@ func (s *Server) pair(payload map[string]any) (int, any) {
 	fmt.Printf("[peer:%s] 待确认 %s: %s %s scope=%s message=%.120s\n",
 		s.cfg.Name, requestID, asString(source["hostname"]), asString(source["agent"]),
 		scope, asString(payload["message"]))
+	s.notify(requestID, "pairing", asString(payload["message"]))
 	return 202, map[string]any{
 		"status": "pending", "request_id": requestID,
 		"target": s.publicPeer(""), "expires_in": PendingTTLS,
@@ -366,11 +465,29 @@ func (s *Server) status(query map[string][]string) (int, any) {
 		}
 		return 200, map[string]any{"status": "pending", "request_id": requestID}
 	}
-	result, ok := s.completed[requestID]
-	if !ok || asString(result["peer_id"]) != peerID {
-		return 404, map[string]any{"error": "配对申请不存在"}
+	if item, ok := s.executionPending[requestID]; ok {
+		if asString(item["peer_id"]) != peerID {
+			return 404, map[string]any{"error": "执行申请不存在"}
+		}
+		return 200, map[string]any{"status": "pending", "request_id": requestID}
 	}
-	return 200, result
+	if item, ok := s.executionRunning[requestID]; ok {
+		if asString(item["peer_id"]) != peerID {
+			return 404, map[string]any{"error": "执行申请不存在"}
+		}
+		return 200, map[string]any{"status": "running", "request_id": requestID}
+	}
+	if result, ok := s.completed[requestID]; ok {
+		if asString(result["peer_id"]) != peerID {
+			return 404, map[string]any{"error": "配对申请不存在"}
+		}
+		return 200, result
+	}
+	result, ok := s.executionCompleted[requestID]
+	if !ok || asString(result["peer_id"]) != peerID {
+		return 404, map[string]any{"error": "执行申请不存在"}
+	}
+	return 200, map[string]any{"status": asString(result["status"]), "request_id": requestID}
 }
 
 func (s *Server) local(w http.ResponseWriter, r *http.Request, path string, payload map[string]any) (int, any) {
@@ -387,6 +504,11 @@ func (s *Server) local(w http.ResponseWriter, r *http.Request, path string, payl
 			entry["request_id"] = id
 			requests = append(requests, entry)
 		}
+		for id, item := range s.executionPending {
+			entry := copyGrant(item)
+			entry["request_id"] = id
+			requests = append(requests, entry)
+		}
 		s.mu.Unlock()
 		return 200, map[string]any{"requests": requests, "grants": s.Grants.ListGrants()}
 	}
@@ -396,6 +518,22 @@ func (s *Server) local(w http.ResponseWriter, r *http.Request, path string, payl
 		return 200, map[string]any{"ok": removed}
 	}
 	s.mu.Lock()
+	execution, executionOK := s.executionPending[requestID]
+	if executionOK {
+		delete(s.executionPending, requestID)
+		status := "denied"
+		if path == "/peer/approve" {
+			status = "approved"
+		}
+		if path != "/peer/approve" && path != "/peer/deny" {
+			s.mu.Unlock()
+			return 404, map[string]any{"error": "未知审批操作"}
+		}
+		execution["status"] = status
+		s.executionCompleted[requestID] = execution
+		s.mu.Unlock()
+		return 200, map[string]any{"ok": true, "status": status}
+	}
 	pending, ok := s.pending[requestID]
 	if ok {
 		delete(s.pending, requestID)
@@ -414,9 +552,12 @@ func (s *Server) local(w http.ResponseWriter, r *http.Request, path string, payl
 	if path != "/peer/approve" {
 		return 404, map[string]any{"error": "未知审批操作"}
 	}
-	mode := asString(payload["mode"])
-	scope := asString(payload["scope"])
-	if (mode != "pair" && mode != "session") || (scope != "chat" && scope != "project") {
+	companyJoin := asString(pending["kind"]) == "company"
+	mode, scope := asString(payload["mode"]), asString(payload["scope"])
+	if companyJoin {
+		mode, scope = "company", asString(pending["scope"])
+	}
+	if (mode != "pair" && mode != "session" && mode != "company") || (scope != "chat" && scope != "project") {
 		return 400, map[string]any{"error": "请选择 pair/session 和 chat/project"}
 	}
 	if scope == "project" && asString(pending["scope"]) != "project" {
@@ -433,36 +574,30 @@ func (s *Server) local(w http.ResponseWriter, r *http.Request, path string, payl
 	if scope == "project" && !isDir(cwd) {
 		return 400, map[string]any{"error": "授权工作目录不存在"}
 	}
-	cwds := []any{}
-	if scope == "project" {
-		cwds = append(cwds, cwd)
-	}
-	targetNonce := make([]byte, 24)
-	rand.Read(targetNonce)
-	grant := map[string]any{
-		"grant_id": randomHex(16), "peer_id": asString(source["peer_id"]),
-		"target_peer_id": s.Identity.PeerID, "mode": mode, "scope": scope,
-		"cwds": cwds,
-		"sign_public": asString(source["sign_public"]), "x_public": asString(source["x_public"]),
-		"target_sign_public": s.Identity.SignPublicB64,
-		"target_x_public":    s.Identity.XPublicB64,
-		"initiator_nonce": asString(pending["nonce"]), "target_nonce": b64(targetNonce),
-		"created_at": PyFloat(now()),
-	}
-	signature, err := s.Identity.Sign(stripKey(grant, "target_signature"))
+	grant, err := s.makeGrant(pending, mode, scope, cwd)
 	if err != nil {
 		return 500, map[string]any{"error": err.Error()}
 	}
-	grant["target_signature"] = signature
-	if err := s.Grants.PutGrant(grant); err != nil {
-		return 500, map[string]any{"error": err.Error()}
+	completed := map[string]any{"status": "approved", "peer_id": asString(source["peer_id"]), "grant": grant}
+	response := map[string]any{"ok": true, "status": "approved", "grant": grant}
+	if companyJoin {
+		key, err := s.Identity.SessionKey(asString(grant["x_public"]), asString(grant["initiator_nonce"]), asString(grant["target_nonce"]))
+		if err != nil {
+			return 500, map[string]any{"error": err.Error()}
+		}
+		packet, err := EncryptPacket(key, map[string]any{"company_id": s.Company.ID,
+			"company_name": s.Company.Name, "secret": s.Company.Secret, "members": []any{}},
+			"company:"+asString(grant["grant_id"]))
+		if err != nil {
+			return 500, map[string]any{"error": err.Error()}
+		}
+		completed["company_packet"] = packet
+		response["company_packet"] = packet
 	}
 	s.mu.Lock()
-	s.completed[requestID] = map[string]any{
-		"status": "approved", "peer_id": asString(source["peer_id"]), "grant": grant,
-	}
+	s.completed[requestID] = completed
 	s.mu.Unlock()
-	return 200, map[string]any{"ok": true, "status": "approved", "grant": grant}
+	return 200, response
 }
 
 func (s *Server) directRequest(body map[string]any) (int, any) {
@@ -475,8 +610,47 @@ func (s *Server) directRequest(body map[string]any) (int, any) {
 	if requestID == "" || len(requestID) > 128 {
 		return 400, map[string]any{"error": "无效 request_id"}
 	}
+	requestV2 := asFloat(body["request_version"]) == 2 && s.cfg.RequestPolicy == "each"
+	rawBody, _ := Canonical(body)
+	digest := sha256Sum(rawBody)
 	s.mu.Lock()
-	if s.seenRequests[requestID] {
+	if requestV2 {
+		stores := []map[string]map[string]any{s.executionPending, s.executionRunning, s.executionCompleted}
+		for _, store := range stores {
+			if record := store[requestID]; record != nil && asString(record["digest"]) != digest {
+				s.mu.Unlock()
+				return 409, map[string]any{"error": "相同 request_id 的请求内容已改变"}
+			}
+		}
+		if s.executionPending[requestID] != nil {
+			s.mu.Unlock()
+			return 202, map[string]any{"status": "approval_required", "request_id": requestID}
+		}
+		if s.executionRunning[requestID] != nil {
+			s.mu.Unlock()
+			return 202, map[string]any{"status": "execution_running", "request_id": requestID}
+		}
+		if completed := s.executionCompleted[requestID]; completed != nil {
+			switch asString(completed["status"]) {
+			case "denied":
+				s.mu.Unlock()
+				return 403, map[string]any{"error": "目标机器已拒绝本次执行"}
+			case "expired":
+				s.mu.Unlock()
+				return 410, map[string]any{"error": "本次执行审批已过期"}
+			case "failed":
+				s.mu.Unlock()
+				return 500, map[string]any{"error": "直连执行失败：" + asString(completed["error"])}
+			case "completed":
+				packet := completed["packet"]
+				s.mu.Unlock()
+				return 200, map[string]any{"packet": packet}
+			case "approved":
+				s.executionRunning[requestID] = completed
+				delete(s.executionCompleted, requestID)
+			}
+		}
+	} else if s.seenRequests[requestID] {
 		s.mu.Unlock()
 		return 409, map[string]any{"error": "重复请求已拒绝"}
 	}
@@ -528,12 +702,37 @@ func (s *Server) directRequest(body map[string]any) (int, any) {
 		return 400, map[string]any{"error": "消息为空或超过 40000 字符"}
 	}
 	s.mu.Lock()
-	if s.seenRequests[requestID] {
-		s.mu.Unlock()
-		return 409, map[string]any{"error": "重复请求已拒绝"}
+	if requestV2 {
+		if s.executionRunning[requestID] == nil {
+			sourceAgent := asString(grant["source_agent"])
+			if sourceAgent == "" {
+				sourceAgent = "lanbus-cli"
+			}
+			s.executionPending[requestID] = map[string]any{
+				"kind": "execution", "source": map[string]any{
+					"peer_id": asString(grant["peer_id"]), "hostname": asString(grant["source_hostname"]),
+					"agent": sourceAgent,
+				},
+				"message": message, "scope": scope, "cwd": cwd,
+				"created_at": PyFloat(now()), "expires_at": PyFloat(now() + PendingTTLS),
+				"peer_id": asString(grant["peer_id"]), "grant_id": grantID,
+				"digest": digest, "payload": payload,
+			}
+		}
+	} else {
+		if s.seenRequests[requestID] {
+			s.mu.Unlock()
+			return 409, map[string]any{"error": "重复请求已拒绝"}
+		}
+		s.seenRequests[requestID] = true
 	}
-	s.seenRequests[requestID] = true
+	isPending := requestV2 && s.executionPending[requestID] != nil
 	s.mu.Unlock()
+	if isPending {
+		fmt.Printf("[peer:%s] 待批准执行 %s: %.120s\n", s.cfg.Name, requestID, message)
+		s.notify(requestID, "execution", message)
+		return 202, map[string]any{"status": "approval_required", "request_id": requestID}
+	}
 	timeout := asFloat(payload["timeout"])
 	if timeout <= 0 {
 		timeout = 300
@@ -545,6 +744,15 @@ func (s *Server) directRequest(body map[string]any) (int, any) {
 	encrypted, err := EncryptPacket(key, result, aad)
 	if err != nil {
 		return 500, map[string]any{"error": "直连执行失败：" + err.Error()}
+	}
+	if requestV2 {
+		s.mu.Lock()
+		running := s.executionRunning[requestID]
+		delete(s.executionRunning, requestID)
+		running["status"] = "completed"
+		running["packet"] = encrypted
+		s.executionCompleted[requestID] = running
+		s.mu.Unlock()
 	}
 	return 200, map[string]any{"packet": encrypted}
 }

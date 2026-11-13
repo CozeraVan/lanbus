@@ -1,7 +1,9 @@
 # 直连 worker 自启动（零配置 peering）
 
-直连模式（`--direct`）不需要 Hub 与 token：worker 启动后在局域网通告
-`/peer/health`，发起方配对、**目标机人工审批**后才能执行。自启动只负责把
+直连模式（`--direct`）不需要 Hub 与 token：节点启动后在局域网通告
+`/peer/health`。默认 `company` 策略下，新节点向任一现有成员申请加入并经
+**该成员本机人工批准一次**，之后同公司成员自由通信；非成员仍走人工配对，
+`--request-policy each` 则每次请求都需“批准一次”。自启动只负责把
 worker 拉起来，审批边界不变。
 
 ## Windows（登录自启，无需管理员）

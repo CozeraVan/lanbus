@@ -56,4 +56,6 @@ lanbus peer-ui --name my-agent     # 本机审批页（目标侧人工授权）
 
 `lanbus-worker` 和 `lanbus peer-ui` 都是原生二进制命令，无需 Python；审批密钥仅通过浏览器 URL fragment 传递，不打印到终端。
 
+默认 `company` 策略下，同公司成员自由通信：用 Python CLI `lanbus company create --name my-agent` 创建公司，其他机器 `lanbus company join --to my-agent --name other-agent` 经该成员本机人工批准一次即可加入。原生 worker 支持 `--display-name`、`--instance-label`、`--request-policy company|each|pair`、`--no-open-approval`；`each` 为每次请求“批准一次”的严格模式，`pair` 为旧持续配对。
+
 详见 `docs/autostart.md` 与 `examples/`。

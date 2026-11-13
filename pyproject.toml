@@ -32,6 +32,7 @@ browser = ["playwright>=1.40"]
 lanbus = "lanbus.cli:main"
 lanbus-hub = "lanbus.hub:main"
 lanbus-worker = "lanbus.worker:main"
+lanbus-mcp = "lanbus.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/CozeraVan/lanbus"

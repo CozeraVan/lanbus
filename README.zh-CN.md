@@ -102,32 +102,59 @@ MCP `lan_dispatch` / `lan_dispatch_many` / `lan_envs` / `lan_list` / `lan_result
 `lanbusd`，对比 status、exit code、verify 和任务结果。Go hub 现在是 8788 上的默认 hub；
 Python hub（`lanbus hub` / `start-hub-python.cmd`）保留为 browser/legacy 回退。
 
-### 零配置跨机 Agent 直连（Python Worker）
+### Agent 公司成员网络（无需 Hub 或 token）
 
-被指挥机器启动直连 Worker，不需要 Hub 或 token：
+直连模式下没有 host／worker 主次之分：每个节点都能发现、询问、接收消息和派发任务。`lanbus agent` 是对称节点入口，旧的 `lanbus worker --direct` 保持兼容。显示名和实例标签用于区分同机多个 agent／窗口：
 
 ```bash
-lanbus worker --name mac-agent --env macos --direct --cwd ~/project --agent claude
+# 任一机器创建公司；也可在已有成员机器上执行加入命令
+lanbus company create --name mac-agent --company-name "我的团队"
+lanbus agent --name mac-agent --env macos --direct --cwd ~/project --agent claude \
+  --display-name "后端 Claude" --instance-label backend
+# 桌面通知仍保留，但不自动打开审批页时追加 --no-open-approval
 ```
 
-发起机器直接对话或提交项目任务：
+另一台机器向**任一现有成员**申请加入；申请只在被请求成员的机器上出现，人工选择“批准加入”一次：
+
+```bash
+lanbus company join --to mac-agent --name a-agent
+# 之后第三个节点也可以向 a-agent 申请，而不是必须回到创建者
+lanbus company join --to a-agent --name c-agent
+```
+
+加入后同公司成员可直接双向通信，不再两两配对或逐次审批：
 
 ```bash
 lanbus chat --to mac-agent --message "请介绍你的环境，并给出协作方案"
 lanbus run --to 192.168.1.236:8790 --cwd /Users/me/project --message "检查项目并运行测试"
+lanbus company show --name a-agent
+lanbus company leave --name a-agent
 ```
 
-首次请求会在目标终端显示待确认 ID，发起端自动等待。目标用户在本机执行：
+本机 agent 通过 MCP 使用同一身份。把下面配置放进 MCP 客户端，`LANBUS_PEER_DIR` 必须指向该节点的数据目录；**不要写入公司 secret**：
 
-```bash
-lanbus inbox --name mac-agent
-lanbus allow REQUEST_ID --name mac-agent --pair --scope chat
-# 或仅本次会话：lanbus allow REQUEST_ID --name mac-agent --session --scope project --cwd ~/project
+```json
+{
+  "mcpServers": {
+    "lanbus": {
+      "command": "lanbus-mcp",
+      "env": {"LANBUS_PEER_DIR": "/Users/me/.lanbus/peers/a-agent"}
+    }
+  }
+}
 ```
 
-批准后请求自动继续；持续配对后续无需确认，会话授权空闲 30 分钟或目标重启后失效。`lanbus revoke PEER_ID --name mac-agent` 可在目标本机撤销。默认扫描包含直连端口 `8790`、`8791`，也可显式使用 IP:port。
+提供 `lanbus_agent_discover`、`lanbus_agent_send`、`lanbus_agent_delegate`、`lanbus_agent_result`、`lanbus_company_list`、`lanbus_company_join` 六个工具。MCP 是本机 agent 的入口，不是中心服务器；首次加入仍需目标人工批准。
 
-直连采用 Ed25519 身份、X25519 密钥协商和 AES-GCM 加密。私密文件在 POSIX 下使用 `0700` 目录、`0600` 文件和原子写入；审批、拒绝、撤销只接受目标本机回环请求。项目任务限制在批准的 cwd 内，但底层 agent CLI 不等于完整 OS 沙箱，授权前仍应检查来源和请求内容。
+策略说明：
+
+- `company`（默认）：同公司成员自由通信；非成员仍走人工配对，不能借公司路径绕过审批。
+- `each`：严格模式，每次对话／任务都显示“来源请求指挥目标实例”，选择“批准一次”后才执行；也可用 `lanbus allow REQUEST_ID --name mac-agent`。
+- `pair`：旧持续配对模式。非成员首次配对可用 `lanbus allow REQUEST_ID --name mac-agent --pair --scope chat`，或 `--session --scope project --cwd ~/project` 仅授权本次会话。会话授权空闲 30 分钟或目标重启后失效。
+
+同一机器有多个同名 agent 时，可直接使用唯一实例标签：`lanbus chat --to backend --message "..."`；重名错误会列出机器、agent、实例、目录和 endpoint，不会默认选第一个。默认扫描包含端口 `8790`、`8791`，也可显式使用 IP:port。`lanbus revoke PEER_ID --name mac-agent` 可在本机撤销该来源的授权。
+
+直连采用 Ed25519 身份、X25519 密钥协商和 AES-GCM 加密；公司加入凭证也经加密通道下发。私密文件在 POSIX 下使用 `0700` 目录、`0600` 文件和原子写入；审批、拒绝、撤销只接受目标本机回环请求。项目任务限制在批准的 cwd 内，但底层 agent CLI 不等于完整 OS 沙箱，授权前仍应检查来源和请求内容。**公司 secret 由全部成员共享，任一成员被攻陷都可能危及整个公司；离开公司不会自动撤销其他节点已保存的授权。**
 
 ### Hub 模式（兼容已有部署）
 
@@ -501,7 +528,7 @@ lanbus worker --name mac-a-cli --env macos --hub http://HUB_LAN_IP:8788 --token 
 
 ```bash
 pip install -e ".[dev]"
-pytest -v                     # 91 项：协议、派单/打回、实时日志、取消/中断、租约恢复、产物、角色 token、侦查、对话、Web UI、本地 worker 管理、Go hub 工具/双跑、远程确认、直连 peering、发布产物
+pytest -v                     # 107 项：协议、派单/打回、实时日志、取消/中断、租约恢复、产物、角色 token、侦查、对话、Web UI、本地 worker 管理、Go hub 工具/双跑、远程确认、直连 peering、公司成员网络、MCP 入口、桌面通知、逐次审批、发布产物
 make go-test                  # Go 扫描器 + worker + hub + backup + daemon 测试
 make go-scan                  # 构建 bin/lanbus-scan，Python 自动检测
 make go-worker                # 构建 bin/lanbus-worker

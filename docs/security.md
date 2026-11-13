@@ -18,11 +18,14 @@ lanbusd --tls-cert cert.pem --tls-key key.pem
 
 非公开端点要求 `Host` 为 localhost 或 IP（`validHost`），抵御 DNS rebinding。公开端点仅 `/health`、`/`、`/ui`。
 
-## 直连 peering（零配置）
+## 对称节点与公司成员网络
 
 - Ed25519 身份（peer_id = sha256(raw pub)[:32]），X25519 ECDH → HKDF-SHA256 → AES-256-GCM 加密请求/回复。
-- **目标侧人工审批**：配对/请求须经 `lanbus inbox/allow` 或审批页（loopback-only `/peer/ui`，密钥经 URL fragment，不落日志）显式批准；可 revoke。
-- 审批/管理端点仅 loopback + `X-Lanbus-Approval` 密钥。
+- **加入人工审批**：新节点向任一现有成员申请加入，必须经 `lanbus inbox/allow` 或审批页（loopback-only `/peer/ui`，密钥经 URL fragment，不落日志）显式批准。公司凭证通过加入响应中的 AES-GCM `company_packet` 下发，不出现在 health、URL、日志、通知或 MCP 配置中。
+- **成员证明**：陌生成员之间通过 `HMAC-SHA256(secret, company_id + ":" + peer_id + ":" + nonce)` 证明公司成员身份，目标自动签发独立加密 grant。默认 `company` 策略不再逐次审批；`each` 保留每次“批准一次”，`pair` 保留旧持续配对。
+- 审批/管理端点仅 loopback + `X-Lanbus-Approval` 密钥，可 revoke。`company.json`、身份和 grant 在 POSIX 下以私密权限原子写入。
+- **共享凭证边界**：所有成员持有相同公司 secret，并非每台机器独立机密。任一成员或其数据目录被攻陷，攻击者可能冒充任意节点取得整个公司的成员会话。MCP 只从本机数据目录读取凭证，配置中不得复制 secret。
+- `company leave` 只移除本节点公司文件，不会远程撤销其他节点已签发的 grant；要切断特定来源，需在各目标本机 `lanbus revoke PEER_ID`。公司成员自由通信不是 OS 沙箱，项目任务仍受授权 cwd 限制。
 
 ## 可观测性（pprof）
 

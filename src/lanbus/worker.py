@@ -973,6 +973,12 @@ def main():
     ap.add_argument("--direct-port", type=int, default=8790)
     ap.add_argument("--direct-bind", default="0.0.0.0")
     ap.add_argument("--direct-data-dir", default="")
+    ap.add_argument("--display-name", default="", help="审批页显示的目标名称")
+    ap.add_argument("--instance-label", default="", help="区分同机多窗口的实例标签")
+    ap.add_argument("--request-policy", choices=("company", "each", "pair"), default="company",
+                    help="company=公司成员自由通信；each=每次批准；pair=旧版持续配对")
+    ap.add_argument("--no-open-approval", action="store_true",
+                    help="只发送系统通知，不自动打开本机审批页面")
     ap.add_argument("--token",
                     default=os.environ.get("LANBUS_WORKER_TOKEN")
                     or os.environ.get("LANBUS_TOKEN", "devtoken"))
@@ -1004,6 +1010,7 @@ def main():
     a = ap.parse_args()
     if a.direct:
         from .peer import PeerServer
+        from .peer_notify import desktop_notifier
         data_dir = a.direct_data_dir or os.path.join(
             os.path.expanduser("~"), ".lanbus", "peers", a.name)
         server = PeerServer(name=a.name, agent=a.agent, cwd=a.cwd or os.getcwd(),
@@ -1011,7 +1018,10 @@ def main():
                                 a.cmd or DEFAULTS.get(a.agent, ""),
                                 a.agent_permission_mode),
                             data_dir=data_dir,
-                            host=a.direct_bind, port=a.direct_port)
+                            host=a.direct_bind, port=a.direct_port,
+                            display_name=a.display_name, instance_label=a.instance_label,
+                            request_policy=a.request_policy,
+                            notifier=desktop_notifier(not a.no_open_approval))
         server.start()
         print(f"[worker:{a.name}] direct={server.url} peer_id={server.identity.peer_id}",
               flush=True)

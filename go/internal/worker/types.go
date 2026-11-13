@@ -35,6 +35,10 @@ type Config struct {
 	DirectPort          int
 	DirectBind          string
 	DirectDataDir       string
+	DisplayName         string
+	InstanceLabel       string
+	RequestPolicy       string
+	NoOpenApproval      bool
 	AgentPermissionMode string
 }
 

@@ -15,14 +15,15 @@ import re
 
 from urllib.parse import quote
 
-from . import __version__, connections
+from . import __version__, connections, discovery
 
 USAGE = """lanbus —— LAN agent bus
 
 用法:
   lanbus hub     [--port 8788] [--bind 0.0.0.0] [--token T] [--worker-token W] [--data-dir DIR]
   lanbus worker  --name NAME --env ENV --hub URL [--agent claude] [--cwd DIR]
-  lanbus worker  --name NAME --env ENV --direct [--direct-port 8790] [--agent claude]
+  lanbus agent   --name NAME --env ENV --direct [--direct-port 8790] [--agent claude]
+  lanbus company create|join|show|leave [--name NAME] [--to PEER]
   lanbus chat    --to PEER --message "..." [--timeout 300]
   lanbus run     --to PEER --cwd DIR --message "..."
   lanbus inbox|allow|deny|revoke [--name NAME]  # 目标机器本机审批
@@ -410,24 +411,35 @@ def _peer_data_dir(name=""):
     return os.path.join(os.path.expanduser("~"), ".lanbus", "peers", name or "initiator")
 
 
+def _peer_candidates(value):
+    candidates = {}
+    for agent in discovery.discover({}).get("agents") or []:
+        labels = (agent.get("name"), agent.get("display_name"), agent.get("instance_label"))
+        if agent.get("kind") != "lanbus-peer" or value not in labels or not agent.get("endpoint"):
+            continue
+        peer_id = agent.get("peer_id") or agent["endpoint"]
+        candidate = candidates.setdefault(peer_id, dict(agent, endpoints=[]))
+        if agent["endpoint"] not in candidate["endpoints"]:
+            candidate["endpoints"].append(agent["endpoint"])
+    return list(candidates.values())
+
+
 def _resolve_peer(value):
     if value.startswith("http://") or value.startswith("https://"):
         return value.rstrip("/")
     if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}:\d+$", value):
         return "http://" + value
-    from . import discovery
-    candidates = []
-    for agent in discovery.discover({}).get("agents") or []:
-        if agent.get("kind") == "lanbus-peer" and agent.get("name") == value:
-            candidates.append((agent.get("endpoint"),
-                               agent.get("peer_id") or agent.get("endpoint")))
-    candidates = [item for item in dict.fromkeys(candidates) if item[0]]
+    candidates = _peer_candidates(value)
     if not candidates:
-        raise ValueError("目标名未发现，请使用 --to IP:PORT；候选：")
-    if len({pid for _, pid in candidates}) != 1:
-        raise ValueError("目标名不唯一（多个不同 peer 同名），请使用 --to IP:PORT；候选：" +
-                         ", ".join(e for e, _ in candidates))
-    endpoints = [e for e, _ in candidates]
+        raise ValueError("目标名或实例标签未发现，请使用 --to IP:PORT")
+    if len(candidates) != 1:
+        choices = [{key: item.get(key) for key in (
+            "hostname", "agent", "display_name", "instance_label", "cwd_display", "peer_id")}
+            | {"endpoint": endpoint}
+            for item in candidates for endpoint in item["endpoints"]]
+        raise ValueError("目标不唯一，请改用唯一实例标签、peer_id 或 --to IP:PORT；候选：" +
+                         json.dumps(choices, ensure_ascii=False))
+    endpoints = candidates[0]["endpoints"]
     if len(endpoints) > 1:
         # 同一 peer 在多网卡上被报告：优先主网卡所在子网的 endpoint。
         prefix = ""
@@ -480,6 +492,8 @@ def _direct_chat(argv, scope):
             return None, 1
 
         grant = client.find_grant(health["peer_id"], scope)
+        if not grant:
+            grant = client.find_company_grant(health, message, scope, cwd)
         if not grant:
             grant, rc = await_pairing()
             if not grant:
@@ -565,10 +579,15 @@ def _peer_daemon(argv):
         _arg(argv, "--cmd") or worker.DEFAULTS.get(agent, ""),
         _arg(argv, "--agent-permission-mode") or
         os.environ.get("LANBUS_AGENT_PERMISSION_MODE", ""))
+    from .peer_notify import desktop_notifier
     server = peer.PeerServer(name=name, agent=agent, cwd=_arg(argv, "--cwd") or os.getcwd(),
                              command=command, data_dir=_arg(argv, "--data-dir") or _peer_data_dir(name),
                              host=_arg(argv, "--bind", "0.0.0.0"),
-                             port=int(_arg(argv, "--port", "8790") or 8790))
+                             port=int(_arg(argv, "--port", "8790") or 8790),
+                             display_name=_arg(argv, "--display-name"),
+                             instance_label=_arg(argv, "--instance-label"),
+                             request_policy=_arg(argv, "--request-policy", "company"),
+                             notifier=desktop_notifier("--no-open-approval" not in argv))
     server.start()
     print(f"[peer:{name}] direct={server.url} peer_id={server.identity.peer_id}", flush=True)
     print(f"[peer:{name}] 本机审批: lanbus inbox --name {name}", flush=True)
@@ -717,6 +736,38 @@ def _ask_cmd(argv):
     return 0 if out.get("ok") else 1
 
 
+def _company(argv):
+    from .company import CompanyStore
+    from . import peer
+    action = argv[0] if argv else "show"
+    data_dir = _arg(argv, "--data-dir") or _peer_data_dir(_arg(argv, "--name"))
+    store = CompanyStore(data_dir)
+    try:
+        if action == "create":
+            company = store.load() or store.create(_arg(argv, "--company-name", "Lanbus 公司"))
+        elif action == "join":
+            url = _resolve_peer(_arg(argv, "--to"))
+            client = peer.DirectClient(url, data_dir)
+            company = client.join_company(_arg(argv, "--message", "申请加入公司"),
+                                          status_timeout=float(_arg(argv, "--pair-timeout", "600")))
+        elif action == "leave":
+            store.clear()
+            print(json.dumps({"ok": True, "left": True}, ensure_ascii=False))
+            return 0
+        elif action == "show":
+            company = store.load()
+        else:
+            raise ValueError("用法：lanbus company create|join|show|leave")
+        public = dict(company or {})
+        public.pop("secret", None)
+        public["joined"] = bool(company)
+        print(json.dumps(public, ensure_ascii=False, indent=2))
+        return 0 if company else 1
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        return 1
+
+
 def main(argv=None):
     # 重定向到文件/管道时也保持 UTF-8，避免 Windows 默认 GBK 把 JSON 写坏
     for stream in (sys.stdout, sys.stderr):
@@ -760,6 +811,8 @@ def main(argv=None):
         return _peer_daemon(rest)
     if cmd in ("peers", "inbox", "allow", "deny", "revoke", "peer-ui"):
         return _peer_local(rest, cmd)
+    if cmd == "company":
+        return _company(rest)
     if cmd == "interrupt":
         return _interrupt(rest)
     if cmd == "logs":

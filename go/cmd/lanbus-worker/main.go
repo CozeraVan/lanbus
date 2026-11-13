@@ -35,6 +35,10 @@ func main() {
 	flag.IntVar(&cfg.DirectPort, "direct-port", 8790, "direct peer port")
 	flag.StringVar(&cfg.DirectBind, "direct-bind", "0.0.0.0", "direct bind address")
 	flag.StringVar(&cfg.DirectDataDir, "direct-data-dir", "", "direct identity/grant dir (default ~/.lanbus/peers/<name>)")
+	flag.StringVar(&cfg.DisplayName, "display-name", "", "approval window target display name")
+	flag.StringVar(&cfg.InstanceLabel, "instance-label", "", "label distinguishing multiple local agent windows")
+	flag.StringVar(&cfg.RequestPolicy, "request-policy", "company", "company=free member chat; each=approve every request; pair=legacy")
+	flag.BoolVar(&cfg.NoOpenApproval, "no-open-approval", false, "do not open the local approval page")
 	flag.StringVar(&cfg.AgentPermissionMode, "agent-permission-mode", os.Getenv("LANBUS_AGENT_PERMISSION_MODE"),
 		"override agent --permission-mode (e.g. bypassPermissions on trusted LAN)")
 	flag.Parse()

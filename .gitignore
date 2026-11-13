@@ -46,3 +46,14 @@ Thumbs.db
 
 # local test artifacts (worklog evidence stays local)
 runs/
+
+# cross-version black-box runtime artifacts (scripts are tracked)
+cross-version/case-*/
+cross-version/current-bin/
+cross-version/v191/
+cross-version/v192/
+cross-version/*.whl
+
+# local release validation binaries
+release-v1.9.2-validation/
+release-v*-changelog.md
