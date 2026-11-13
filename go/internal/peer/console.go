@@ -222,9 +222,160 @@ func (s *Server) consoleSend(body map[string]any) (int, any) {
 	if statusTimeout <= 0 {
 		statusTimeout = 600
 	}
-	result, err := client.RequestV2(grant, message, scope, asString(body["cwd"]), timeout, statusTimeout)
+	// Multi-turn continuity: the target spawns a fresh agent per request, so we
+	// prepend the stored conversation history to each new message. The first
+	// turn (no history) is sent unchanged, preserving one-shot behavior.
+	convKey := targetURL
+	priorTurns := convTurns(loadConversations(dir), convKey)
+	outgoing := buildContextMessage(priorTurns, message)
+	result, err := client.RequestV2(grant, outgoing, scope, asString(body["cwd"]), timeout, statusTimeout)
 	if err != nil {
 		return 502, map[string]any{"error": err.Error()}
 	}
+	// Record the clean exchange (original user text, not the context-expanded
+	// prompt) so history never compounds prior context blobs.
+	recordExchange(dir, convKey, targetURL, scope, message, asString(result["reply"]))
+	result["conversation_turns"] = PyFloat(float64(len(priorTurns) + 2))
 	return 200, result
+}
+
+// consoleHistory returns the stored conversation turns for a target so the GUI
+// can restore the dialog across reloads.
+func (s *Server) consoleHistory(body map[string]any) (int, any) {
+	dir, err := s.controllerDir(asString(body["controller"]))
+	if err != nil {
+		return 400, map[string]any{"error": err.Error()}
+	}
+	key := strings.TrimRight(asString(body["target_url"]), "/")
+	if key == "" {
+		return 400, map[string]any{"error": "缺少 target_url"}
+	}
+	turns := convTurns(loadConversations(dir), key)
+	if turns == nil {
+		turns = []any{}
+	}
+	return 200, map[string]any{"target_url": key, "turns": turns}
+}
+
+// consoleReset clears a conversation so the next message starts fresh.
+func (s *Server) consoleReset(body map[string]any) (int, any) {
+	dir, err := s.controllerDir(asString(body["controller"]))
+	if err != nil {
+		return 400, map[string]any{"error": err.Error()}
+	}
+	key := strings.TrimRight(asString(body["target_url"]), "/")
+	if key == "" {
+		return 400, map[string]any{"error": "缺少 target_url"}
+	}
+	convs := loadConversations(dir)
+	delete(convs, key)
+	if err := saveConversations(dir, convs); err != nil {
+		return 500, map[string]any{"error": err.Error()}
+	}
+	return 200, map[string]any{"ok": true}
+}
+
+// --- multi-turn conversation store (controller-side, per controller dir) ---
+
+const (
+	consoleConvFile     = "console-conversations.json"
+	consoleMaxTurns     = 16    // most recent turns kept in the context prompt
+	consoleTurnRunes    = 1500  // per-turn truncation inside the context prompt
+	consoleContextRunes = 12000 // total history budget in the context prompt
+)
+
+func consoleConvPath(dir string) string { return filepath.Join(dir, consoleConvFile) }
+
+func loadConversations(dir string) map[string]any {
+	raw, err := os.ReadFile(consoleConvPath(dir))
+	if err != nil {
+		return map[string]any{}
+	}
+	obj, err := ParseObject(raw)
+	if err != nil {
+		return map[string]any{}
+	}
+	return obj
+}
+
+func saveConversations(dir string, convs map[string]any) error {
+	return atomicJSON(consoleConvPath(dir), convs, true)
+}
+
+func convTurns(convs map[string]any, key string) []any {
+	conv, _ := convs[key].(map[string]any)
+	if conv == nil {
+		return nil
+	}
+	turns, _ := conv["turns"].([]any)
+	return turns
+}
+
+func recordExchange(dir, key, targetURL, scope, userText, agentText string) {
+	convs := loadConversations(dir)
+	conv, _ := convs[key].(map[string]any)
+	if conv == nil {
+		conv = map[string]any{}
+	}
+	turns, _ := conv["turns"].([]any)
+	ts := now()
+	turns = append(turns, map[string]any{"role": "user", "text": userText, "ts": ts})
+	turns = append(turns, map[string]any{"role": "agent", "text": agentText, "ts": ts})
+	conv["target_url"] = targetURL
+	conv["scope"] = scope
+	conv["turns"] = turns
+	conv["updated_at"] = ts
+	convs[key] = conv
+	_ = saveConversations(dir, convs)
+}
+
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// buildContextMessage renders prior turns plus the new message into one prompt
+// so a freshly spawned target agent sees the conversation. With no history it
+// returns the message unchanged. History is bounded by turn count and runes.
+func buildContextMessage(turns []any, message string) string {
+	if len(turns) == 0 {
+		return message
+	}
+	start := len(turns) - consoleMaxTurns
+	if start < 0 {
+		start = 0
+	}
+	var lines []string
+	total := 0
+	for _, tv := range turns[start:] {
+		t, _ := tv.(map[string]any)
+		if t == nil {
+			continue
+		}
+		label := "操控方"
+		if asString(t["role"]) == "agent" {
+			label = "目标 agent"
+		}
+		line := "[" + label + "] " + truncateRunes(asString(t["text"]), consoleTurnRunes)
+		lines = append(lines, line)
+		total += len([]rune(line))
+	}
+	// Drop oldest lines until within budget; always keep the newest line.
+	for total > consoleContextRunes && len(lines) > 1 {
+		total -= len([]rune(lines[0]))
+		lines = lines[1:]
+	}
+	var b strings.Builder
+	b.WriteString("# lanbus 指挥台 · 多轮对话上下文\n")
+	b.WriteString("你正在与操控方进行多轮对话。请结合下面的历史记录回应「最新消息」。\n\n")
+	for _, line := range lines {
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	b.WriteString("\n## 最新消息\n")
+	b.WriteString(message)
+	return b.String()
 }

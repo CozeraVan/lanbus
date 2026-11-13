@@ -75,7 +75,7 @@ main{padding:18px 22px;display:flex;flex-direction:column;max-width:1000px}
   <div id="dialog"><div class="muted small">完成左侧 1–5 步后，这里显示操控者与目标 agent 的对话。</div></div>
   <div class="card" style="margin-top:12px">
     <textarea id="msg" placeholder="输入要传输给目标 agent 的信息…（Ctrl+Enter 发送）"></textarea>
-    <div class="row" style="margin-top:8px"><button class="primary" id="sendBtn" onclick="sendMsg()" disabled>发送</button><span id="busy" class="muted small"></span></div>
+    <div class="row" style="margin-top:8px"><button class="primary" id="sendBtn" onclick="sendMsg()" disabled>发送</button><button id="resetBtn" onclick="resetConv()" title="清空当前目标的对话记录">清空对话</button><span id="busy" class="muted small"></span></div>
   </div>
 </main>
 </div>
@@ -100,7 +100,7 @@ async function loadLocals(){try{const j=await api('/peer/console/locals');window
 
 function onController(){state.controller=$('#controller').value||null;renderTargets();if(state.controller)setStep(2)}
 
-function addTarget(t){if(!t.url)return;if(state.targets[t.url])return;state.targets[t.url]={name:t.name||t.url,url:t.url,kind:t.kind||'lan',agent:t.agent||'',status:'new',request_id:null,messages:[]}}
+function addTarget(t){if(!t.url)return;if(state.targets[t.url])return;state.targets[t.url]={name:t.name||t.url,url:t.url,kind:t.kind||'lan',agent:t.agent||'',status:'new',request_id:null,messages:[],historyLoaded:false}}
 
 async function discover(){const btn=$('#scanBtn');btn.disabled=true;$('#scanInfo').textContent='嗅探中…（扫描本机与局域网端口）';try{const body={include_local:true,include_processes:true};const cidr=$('#cidr').value.trim();if(cidr)body.cidr=cidr;const j=await api('/peer/console/discover',body);let n=0;(j.agents||[]).forEach(a=>{if(a.kind==='lanbus-peer'&&a.endpoint){addTarget({name:(a.name||a.hostname||a.endpoint)+(a.agent?' · '+a.agent:''),url:a.endpoint,kind:'lan',agent:a.agent});n++}});
   const la=(j.local_agents||[]).length;$('#scanInfo').innerHTML='发现 <b>'+n+'</b> 个局域网 lanbus peer，<b>'+la+'</b> 类本机 agent 进程。'+(j.notes&&j.notes[0]?'<br>'+esc(j.notes[0]):'');
@@ -126,9 +126,17 @@ async function pollPair(t){for(let i=0;i<200;i++){await new Promise(r=>setTimeou
 
 function renderTabs(){const tabs=$('#tabs');tabs.innerHTML='';const approved=Object.values(state.targets).filter(t=>t.status==='approved');approved.forEach(t=>{const b=document.createElement('button');b.textContent=t.name;b.className=state.active===t.url?'active':'';b.onclick=()=>{state.active=t.url;renderTabs();renderDialog();$('#sendBtn').disabled=false};tabs.appendChild(b)});if(!state.active&&approved.length){state.active=approved[0].url;$('#sendBtn').disabled=false}if(state.active)renderDialog()}
 
-function renderDialog(){const box=$('#dialog');const t=state.targets[state.active];if(!t){box.innerHTML='<div class="muted small">选择一个已批准的目标。</div>';return}box.innerHTML='';if(!t.messages.length){box.innerHTML='<div class="muted small">与 '+esc(t.name)+' 的对话。输入信息并发送。</div>'}t.messages.forEach(m=>{const d=document.createElement('div');d.className='msg '+m.dir;const who=m.dir==='out'?('操控者 → '+esc(t.name)):(m.dir==='in'?esc(t.name):'系统');d.innerHTML='<div class="who">'+who+'</div><div class="bubble">'+esc(m.text)+'</div>';box.appendChild(d)});box.scrollTop=box.scrollHeight}
+function renderDialog(){const box=$('#dialog');const t=state.targets[state.active];if(!t){box.innerHTML='<div class="muted small">选择一个已批准的目标。</div>';return}
+  if(!t.historyLoaded){t.historyLoaded=true;loadHistory(t);return}
+  box.innerHTML='';if(!t.messages.length){box.innerHTML='<div class="muted small">与 '+esc(t.name)+' 的多轮对话（自动携带上下文）。输入信息并发送。</div>'}t.messages.forEach(m=>{const d=document.createElement('div');d.className='msg '+m.dir;const who=m.dir==='out'?('操控者 → '+esc(t.name)):(m.dir==='in'?esc(t.name):'系统');d.innerHTML='<div class="who">'+who+'</div><div class="bubble">'+esc(m.text)+'</div>';box.appendChild(d)});box.scrollTop=box.scrollHeight}
 
-function appendSys(t,text){t.messages.push({dir:'sys',text});if(state.active===t.url)renderDialog()}
+// loadHistory restores the persisted conversation once per target so the dialog
+// survives page reloads; the backend keeps the transcript per controller/target.
+async function loadHistory(t){try{const j=await api('/peer/console/history',{controller:state.controller,target_url:t.url});t.messages=(j.turns||[]).map(m=>({dir:m.role==='agent'?'in':'out',text:m.text}))}catch(e){t.messages=[{dir:'sys',text:'加载历史失败：'+e.message}]}if(state.active===t.url)renderDialog()}
+
+async function resetConv(){const t=state.targets[state.active];if(!t){toast('请先选择已批准的目标');return}if(!confirm('清空与 '+t.name+' 的对话记录？下一条消息将不再携带上下文。'))return;try{await api('/peer/console/reset',{controller:state.controller,target_url:t.url});t.messages=[];t.historyLoaded=true;renderDialog();toast('已清空对话')}catch(e){toast(e.message)}}
+
+function appendSys(t,text){t.messages.push({dir:'sys',text});if(state.active===t.url&&t.historyLoaded)renderDialog()}
 
 async function sendMsg(){const t=state.targets[state.active];if(!t){toast('请先选择已批准的目标');return}const msg=$('#msg').value.trim();if(!msg){toast('请输入信息');return}
   t.messages.push({dir:'out',text:msg});$('#msg').value='';renderDialog();$('#sendBtn').disabled=true;$('#busy').textContent='发送中…（等待目标执行）';

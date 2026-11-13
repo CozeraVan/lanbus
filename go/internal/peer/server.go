@@ -303,6 +303,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			status, value = s.consolePairStatus(body)
 		case "/peer/console/send":
 			status, value = s.consoleSend(body)
+		case "/peer/console/history":
+			status, value = s.consoleHistory(body)
+		case "/peer/console/reset":
+			status, value = s.consoleReset(body)
 		default:
 			status, value = 404, map[string]any{"error": "not found"}
 		}
