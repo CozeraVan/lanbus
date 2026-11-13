@@ -2,13 +2,22 @@
 
 [English overview](overview.en.md) · [返回 README](../README.zh-CN.md) · [架构](architecture.md) · [协议](protocol.md)
 
-lanbus 是面向 AI agent 的局域网编排总线。主 agent（A agent CLI、B agent CLI、C agent 桌面端，
-或任何支持 MCP 的客户端）把任务派给运行在其他机器上的 agent，再用可机器校验的证据
-决定通过还是打回重做。
+lanbus 用两种互补模式连接局域网里的 AI agent：
+
+- **直连公司成员网络（默认）** —— 无 Hub 的对称 agent 节点。任一节点创建公司；其他机器向任一现有成员申请加入，人工批准一次后即可双向对话、派发项目任务，通信走加密对等链路。本机 agent 通过 `lanbus-mcp` 使用同一身份。
+- **Hub 编排** —— 主 agent（A agent CLI、B agent CLI、C agent 桌面端，或任何支持 MCP 的客户端）把任务派给运行在其他机器上的 worker，再用可机器校验的证据决定通过还是打回重做。
 
 ## 1. 原理
 
-### 一个入站面，多个主动拉活的 worker
+### 对称对等节点，人工把关的成员制（直连模式）
+
+每个节点都能发现、询问、接收消息和派发任务——没有 host/worker 主次之分，也没有中心
+token 服务器。节点用 Ed25519 身份认证，载荷经 X25519/AES-GCM 加密。加入公司需要任一
+现有成员机器上的人工批准一次；非成员不能借公司路径绕过审批。策略：`company`（成员
+自由通信）、`each`（每次请求都需人工批准）、`pair`（旧持续配对）。公司 secret 由全部
+成员共享，成员资格本身就是信任边界。
+
+### 一个入站面，多个主动拉活的 worker（Hub 模式）
 
 只有 **hub** 对外监听。每个 **worker** 主动向 hub 建立出站连接并拉取任务。这样
 Windows/WSL/macOS 都不需要单独的入站防火墙规则；DHCP、休眠、NAT 和 IP 变化也更
@@ -65,7 +74,8 @@ token 不能审批。面板会显示每个目标的 hostname、agent、`cwd`，�
 | `lanbus-worker` | Go | 拉取 worker：进程监督、Job Object/PTY、各 agent CLI 适配器（或 `--cmd`）、discover/ask、产物 |
 | `lanbus-scan` | Go | 零安装局域网扫描器 |
 | `lanbus-gui` | Go + Wails/WebView2 | Windows 桌面窗口 + 托盘，内嵌 dashboard |
-| `lanbus` | Python | CLI、侦查回退、浏览器助手、Python worker、Python hub 回退 |
+| `lanbus` | Python | CLI、直连对等/公司节点、`lanbus-mcp` 本机 MCP 入口、侦查回退、浏览器助手、Python worker、Python hub 回退 |
+| `lanbus-worker`（direct） | Go | 对称对等节点，与 Python 实现同一套公司协议 |
 | `lanbus-hub` | Python | 参考 hub，browser/legacy 任务回退 |
 
 ### 数据与状态
@@ -93,6 +103,11 @@ token 不能审批。面板会显示每个目标的 hostname、agent、`cwd`，�
   `POST /chat`。
 - Operator：`GET /api/confirmations`、`POST /confirm/approve`、
   `POST /confirm/revoke`。
+- 直连对等（端口 8790，加密）：`/peer/health`、`/peer/pair`、
+  `/peer/pair/status`、`/peer/request`、`/peer/inbox`、`/peer/approve`、
+  `/peer/deny`、`/peer/revoke`、`/peer/ui`。本机 MCP 工具：
+  `lanbus_agent_discover`、`lanbus_agent_send`、`lanbus_agent_delegate`、
+  `lanbus_agent_result`、`lanbus_company_list`、`lanbus_company_join`。
 
 ### 进程控制
 
@@ -129,7 +144,25 @@ token 不能审批。面板会显示每个目标的 hostname、agent、`cwd`，�
 
 ## 4. 使用方法
 
-### 安装与启动
+### 直连公司成员网络
+
+```bash
+lanbus company create --name mac-agent --company-name "我的团队"
+lanbus agent --name mac-agent --env macos --direct --cwd ~/project --agent claude
+# 另一台机器上，先启动自己的节点：
+lanbus company join --to mac-agent --name win-agent   # 在 mac-agent 本机人工批准一次
+lanbus chat --to mac-agent --message "介绍一下你的环境"
+lanbus run --to win-agent --cwd D:/proj --message "跑一下测试"
+```
+
+本机 MCP 入口（配置中不含 secret）：
+
+```json
+{"mcpServers": {"lanbus": {"command": "lanbus-mcp",
+  "env": {"LANBUS_PEER_DIR": "/Users/me/.lanbus/peers/mac-agent"}}}}
+```
+
+### 安装与启动（Hub 模式）
 
 ```bash
 pip install .

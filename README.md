@@ -2,40 +2,61 @@
 
 [![CI](https://github.com/CozeraVan/lanbus/actions/workflows/ci.yml/badge.svg)](https://github.com/CozeraVan/lanbus/actions/workflows/ci.yml)
 
-**One agent entry. Sub-agents everywhere else on your LAN.**
+**A symmetric company network for the AI agents on your LAN — plus a hub for evidence-checked task orchestration.**
 
 [English](README.md) · [中文](README.zh-CN.md) · [Overview](docs/overview.en.md) · [中文总览](docs/overview.zh-CN.md) · [Architecture](docs/architecture.md) · [Protocol](docs/protocol.md)
 
-You talk to a single main agent - an **A agent CLI**, a **B agent CLI**, a **C agent desktop**, or anything that speaks MCP. It dispatches work to agents running on your other machines — Windows for the Web UI, WSL for the Linux build, macOS for native packaging — then **verifies what actually changed** and either accepts the result or sends it back for rework.
+lanbus has two complementary modes:
+
+- **Direct company network (default)** — every machine runs a symmetric agent node. Any node can create a company; other machines join through **any existing member** with one human approval. Members then chat and delegate project tasks in either direction, with no hub, no shared token server, and no pairwise setup. Your local agent reaches the same identity over MCP (`lanbus-mcp`).
+- **Hub mode (orchestration)** — a main agent dispatches tasks to workers on other machines, then **verifies what actually changed** (exit code of your acceptance command, real `git diff`, artifacts) and either accepts the result or sends it back for rework. Best when you want a central task queue, leases, and streamed logs.
 
 Zero mandatory dependencies. Standard library only. Never leaves your LAN. Optional Playwright unlocks real browser actions; Chrome/Edge headless gives fallback screenshots. A built-in scanner finds AI agents already running on the LAN **without installing anything on them**.
 
 ```
-                    you ──► main agent (A agent CLI)
-                                  │ MCP: lan_dispatch / lan_logs / lan_result / lan_review
-                                  ▼
-                        ┌───────────────────┐
-                        │  lanbus hub :8788 │  SQLite task table + state machine
-                        └───┬───────────┬───┘
-              REST (pull)   │           │   REST (pull)
-                        ┌───▼────┐  ┌───▼────┐
-                        │ win-ui │  │ mac-ui │
-                        │windows │  │ macos  │
-                        └───┬────┘  └────────┘
-                            │ same machine
-                        ┌───▼─────┐
-                        │wsl-core │
-                        │  wsl    │
-                        └─────────┘
+Direct company network (no hub)          Hub mode (task orchestration)
+
+  mac-agent ◄────► a-agent               you ──► main agent (MCP)
+      ▲   encrypted    ▲                              │ lan_dispatch / lan_review
+      │   peer links   │                              ▼
+      └──► c-agent ◄───┘                    ┌───────────────────┐
+   join via any member,                     │  lanbus hub :8788 │
+   one human approval                       └───┬───────────┬───┘
+                                    REST (pull) │           │ REST (pull)
+                                            ┌───▼────┐  ┌───▼────┐
+                                            │ win-ui │  │ mac-ui │
+                                            └────────┘  └────────┘
 ```
 
-Workers **pull** from the hub, so only the hub machine needs an inbound port. Sub-environments need no firewall rules at all.
+In direct mode each node listens on its own port (default `8790`) and talks to peers over Ed25519/X25519/AES-GCM encrypted channels. In hub mode workers **pull** from the hub, so only the hub machine needs an inbound port.
 
 ---
 
-## Why this exists
+## Quick start: direct company network (3 minutes)
 
-Running agents in three environments usually means being the human message bus: you ask one agent for a task, then copy its text into the other agent's window, then eyeball the result yourself. lanbus replaces that loop with machine-checkable facts:
+On each machine, start a symmetric node (native binary or `pip install .`):
+
+```bash
+# Machine 1 — create a company and run an agent node
+lanbus company create --name mac-agent --company-name "My team"
+lanbus agent --name mac-agent --env macos --direct --cwd ~/project --agent claude
+
+# Machine 2 — join through any existing member; a human approves once on that member
+lanbus agent --name win-agent --env windows --direct --cwd D:/proj --agent codex
+lanbus company join --to mac-agent --name win-agent
+
+# Either direction, no further setup
+lanbus chat --to mac-agent --message "Introduce your environment and propose a collaboration plan"
+lanbus run --to win-agent --cwd D:/proj --message "Inspect the project and run tests"
+```
+
+Policies: `company` (default, free member communication), `each` (every request needs a human **Approve once**), `pair` (legacy persistent pairing). Non-members always need human approval. See [Symmetric agent company network](#symmetric-agent-company-network-no-hub-or-token) below for MCP access, instance labels, and the security model.
+
+---
+
+## Why hub mode exists
+
+Running agents in three environments usually means being the human message bus: you ask one agent for a task, then copy its text into the other agent's window, then eyeball the result yourself. Hub mode replaces that loop with machine-checkable facts:
 
 | Without lanbus | With lanbus |
 |---|---|
@@ -293,7 +314,7 @@ Releases are built by `.github/workflows/release.yml` on a `v*` tag (cross-platf
 
 ---
 
-## Quick start (3 minutes)
+## Quick start: hub mode (3 minutes)
 
 ### 1. Hub — on the always-on machine (usually Windows)
 
@@ -390,7 +411,9 @@ It resolves the environment, dispatches, watches logs, reads `verify_out` and `d
 
 ## MCP tools
 
-| Tool | Purpose |
+Two MCP surfaces exist. **Direct mode** runs `lanbus-mcp` locally against the node's identity (`LANBUS_PEER_DIR`, no secret in config): `lanbus_agent_discover`, `lanbus_agent_send`, `lanbus_agent_delegate`, `lanbus_agent_result`, `lanbus_company_list`, `lanbus_company_join`. **Hub mode** registers `http://HUB:8788/mcp` with the agent token and exposes the orchestration tools below.
+
+| Tool (hub mode) | Purpose |
 |---|---|
 | `lan_envs` | online workers, caps (`browser`), available `env` values — call before dispatching |
 | `lan_dispatch` | dispatch one task; `context` is composed into the prompt; `wait_s>0` blocks until review |
@@ -424,7 +447,7 @@ queued ──claim──► claimed ──► running ──submit──► subm
 
 ## HTTP surface (for scripts and dashboards)
 
-All endpoints except `/health` require `Authorization: Bearer <token>`.
+Hub mode, port 8788. All endpoints except `/health` require `Authorization: Bearer <token>`. Direct-mode nodes expose a separate encrypted peer protocol on port 8790 (`/peer/*`, see [Protocol](docs/protocol.md)); approval/denial/revocation accept loopback requests only.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -448,6 +471,10 @@ Discovery itself is not a network listener on the scanned hosts: it runs on the 
 ---
 
 ## Security
+
+Direct mode: Ed25519 identities, X25519 key agreement, AES-GCM encryption; company credentials travel through the encrypted join channel. Approve/deny/revoke accept only loopback requests on the target. **All members share the company secret** — compromise of one member may compromise the whole company, and leaving does not revoke grants already stored by other nodes. Project tasks are confined to approved working directories, but the agent CLI is not a full OS sandbox; inspect the source and request before approving.
+
+Hub mode:
 
 - **Two roles**: agent token (`--token`) for MCP/read/artifacts; worker token (`--worker-token`) for `/worker/*` only. If no worker token is set, both roles share one token for backward compatibility. Optional per-worker tokens (`--worker-tokens`) bind a token to one worker name.
 - **Worker ownership**: submit/progress/log only work for the task currently assigned to that worker name and its random `claim_token`; a stale worker cannot resurrect a requeued/cancelled task.
