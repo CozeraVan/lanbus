@@ -25,7 +25,9 @@ func runStreamingPTY(name string, args []string, shellCmd, cwd, stdin string, ca
 	var cmd *pty.Cmd
 	if shellCmd != "" {
 		if isWindows() {
-			cmd = terminal.Command(resolvePTYCommand("cmd.exe"), "/C", shellCmd)
+			exe := resolvePTYCommand("cmd.exe")
+			cmd = terminal.Command(exe)
+			setPTYShellCmdLine(cmd, exe, shellCmd)
 		} else {
 			cmd = terminal.Command(resolvePTYCommand("sh"), "-c", shellCmd)
 		}

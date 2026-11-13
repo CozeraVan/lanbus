@@ -58,10 +58,23 @@ var (
 	procCloseHandle              = kernel32.NewProc("CloseHandle")
 )
 
+// setShellCmdLine gives cmd.exe a raw command line instead of letting Go escape
+// the shell string as a single argument. Go's exec uses MSVCRT-style escaping
+// (\") which cmd.exe does not understand, so embedded double quotes were
+// mangled. `cmd.exe /S /C "<cmd>"` makes cmd strip the outer quotes and run the
+// command verbatim, preserving embedded quotes and special characters.
+func setShellCmdLine(cmd *exec.Cmd, shellCmd string) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: `cmd.exe /S /C "` + shellCmd + `"`}
+}
+
 func startProcess(cmd *exec.Cmd) (*proc, error) {
 	// CREATE_NO_WINDOW keeps CLI children out of the worker console;
 	// CREATE_NEW_PROCESS_GROUP gives Ctrl+C-equivalent fallback semantics.
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow | createNewProcessGroup}
+	// Preserve any CmdLine set by setShellCmdLine rather than clobbering it.
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= createNoWindow | createNewProcessGroup
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
