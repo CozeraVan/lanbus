@@ -78,7 +78,7 @@ func (c *Client) JoinCompany(message, scope, cwd string, statusTimeout float64) 
 	}
 	deadline := time.Now().Add(time.Duration(statusTimeout * float64(time.Second)))
 	for time.Now().Before(deadline) {
-		result, err := PairingStatus(c.URL, requestID, c.Identity.PeerID)
+		result, err := c.pairingStatus(requestID)
 		if err != nil {
 			return nil, err
 		}
@@ -105,6 +105,23 @@ func (c *Client) JoinCompany(message, scope, cwd string, statusTimeout float64) 
 		time.Sleep(300 * time.Millisecond)
 	}
 	return nil, fmt.Errorf("等待目标批准加入公司超时")
+}
+
+// pairingStatus mirrors DirectClient._pairing_status: the server registers a
+// pending request before replying, so on slow machines the first status query
+// can race ahead of registration; retry "not found" briefly.
+func (c *Client) pairingStatus(requestID string) (map[string]any, error) {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		result, err := PairingStatus(c.URL, requestID, c.Identity.PeerID)
+		if err == nil {
+			return result, nil
+		}
+		if !strings.Contains(err.Error(), "不存在") || time.Now().After(deadline) {
+			return nil, err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 func (c *Client) requestPairing(company *Company, join bool, message, scope, cwd string) (map[string]any, error) {

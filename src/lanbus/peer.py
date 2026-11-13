@@ -785,7 +785,7 @@ class DirectClient:
         request_id = pending["request_id"]
         deadline = time.monotonic() + status_timeout
         while time.monotonic() < deadline:
-            result = pairing_status(self.url, request_id, self.identity.peer_id)
+            result = self._pairing_status(request_id)
             if result.get("status") == "approved":
                 grant = result["grant"]
                 self.save_grant(grant)
@@ -799,6 +799,17 @@ class DirectClient:
                 raise RuntimeError("目标已拒绝加入公司或申请已过期")
             time.sleep(0.3)
         raise RuntimeError("等待目标批准加入公司超时")
+
+    def _pairing_status(self, request_id):
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                return pairing_status(self.url, request_id, self.identity.peer_id)
+            except RuntimeError as exc:
+                # 服务端先登记待确认再回包，慢机器上首次查询可能早于登记；短暂重试。
+                if "不存在" not in str(exc) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.2)
 
     def find_company_grant(self, health, message, scope, cwd=""):
         from .company import CompanyStore
