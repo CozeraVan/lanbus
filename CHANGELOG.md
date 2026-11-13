@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [1.9.2] - 2026-11-13
+
+### Fixed
+- `lanbus-worker --version` and `lanbus-scan --version` now use the shared release version injected by the build instead of stale hard-coded values.
+- Added command-level regression tests for native worker and scanner version stamping.
+
 ## [1.9.1] - 2026-11-13
 
 ### Added
