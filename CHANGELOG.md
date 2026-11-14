@@ -5,12 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [1.9.3] - 2026-11-14
+
 ### Added
 - **GUI command console (指挥台)** for the direct company network: a loopback dialog that discovers local/LAN agents, picks a controller and one or more targets, sends a confirmation request, and chats once a human on the target machine approves. Open with `lanbus console --name NAME` or the desktop tray's "指挥台" entry.
 - **Multi-turn conversation context**: the controller stores per-target history and prepends it to each request, so a freshly spawned target agent keeps continuity with no protocol or target-side change (works with any agent).
 - **Console embedded in the desktop window**: the Wails shell serves the console through a loopback reverse proxy (`/console/<name>`) with server-side approval-secret injection and in-window tray navigation, so the page never handles the secret.
 - **Per-target context controls**: a "carry context" toggle and turn limit, persisted per conversation and restored on reload, plus a "clear conversation" reset.
 - **Console UX polish**: per-message copy button and long-reply collapse/expand.
+
+### Fixed
+- **Go worker no longer hangs silently when an agent exits but a child process keeps the output pipe open.** `runStreaming` now detects process exit independently of stdout EOF (a launcher CLI such as `claude.exe` can exit while a lingering SDK/node grandchild holds the inherited pipe), kills the process tree to release the pipe, and drains the captured output — so a failed agent reports its real exit code and error text promptly instead of showing `status=running` with `logs=None` until the total timeout. The dead `ProcessState.Exited()` poll was removed. Model-agnostic: no model validation is added.
 
 ## [1.9.2] - 2026-11-13
 

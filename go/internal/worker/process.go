@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bufio"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -68,6 +69,18 @@ func runStreaming(name string, args []string, shellCmd, cwd, stdin string, cance
 		}
 		close(done)
 	}()
+	// Detect process exit independently of stdout EOF. A child can exit while a
+	// grandchild it spawned keeps the inherited stdout pipe write end open (e.g. a
+	// launcher CLI that leaves a lingering SDK/node process behind). Waiting only
+	// for EOF would hang until the total timeout, surfacing as status=running with
+	// any error text stuck in the scanner buffer. os.Process.Wait reports the exit
+	// without closing the pipe, so remaining output can still be drained.
+	waitCh := make(chan *os.ProcessState, 1)
+	go func() {
+		ps, _ := cmd.Process.Wait()
+		waitCh <- ps
+	}()
+
 	start := time.Now()
 	rc := 0
 	cancelled := false
@@ -75,21 +88,24 @@ func runStreaming(name string, args []string, shellCmd, cwd, stdin string, cance
 	for {
 		select {
 		case <-done:
-			if err := cmd.Wait(); err == nil {
-				rc = 0
-			} else if ee, ok := err.(*exec.ExitError); ok {
-				rc = ee.ExitCode()
-			} else {
-				rc = 1
+			// stdout drained (normal completion); reap the exit code.
+			rc = exitCodeFromState(<-waitCh)
+			goto finished
+		case ps := <-waitCh:
+			// The process exited but a grandchild may still hold the pipe open.
+			// Kill the tree to release it, then drain whatever output remains.
+			p.kill()
+			select {
+			case <-done:
+			case <-time.After(1500 * time.Millisecond):
 			}
+			rc = exitCodeFromState(ps)
 			goto finished
 		case <-cancel:
 			cancelled = true
 			p.kill()
-			time.Sleep(300 * time.Millisecond)
-			p.kill()
 			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
+			<-waitCh
 			rc = 130
 			goto finished
 		case <-time.After(200 * time.Millisecond):
@@ -97,18 +113,15 @@ func runStreaming(name string, args []string, shellCmd, cwd, stdin string, cance
 				timedOut = true
 				p.kill()
 				_ = cmd.Process.Kill()
-				_ = cmd.Wait()
+				<-waitCh
 				rc = 124
-				goto finished
-			}
-			if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-				rc = cmd.ProcessState.ExitCode()
 				goto finished
 			}
 		}
 	}
 finished:
 	p.close()
+	_ = stdout.Close()
 	mu.Lock()
 	out := strings.Join(lines, "\n")
 	mu.Unlock()
@@ -119,6 +132,15 @@ finished:
 		return runResult{124, out + "\n(timeout)"}
 	}
 	return runResult{rc, out}
+}
+
+// exitCodeFromState maps a reaped process state to an exit code, defaulting to 1
+// when the state is unavailable (e.g. the process could not be waited on).
+func exitCodeFromState(ps *os.ProcessState) int {
+	if ps == nil {
+		return 1
+	}
+	return ps.ExitCode()
 }
 
 func envList() []string {
