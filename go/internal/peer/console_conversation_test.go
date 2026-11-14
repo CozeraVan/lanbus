@@ -324,3 +324,85 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// TestConsoleSendReceiptsInHistory proves each recorded agent turn carries a
+// receipt (request_id + status + exit_code) for both success and executor failure.
+func TestConsoleSendReceiptsInHistory(t *testing.T) {
+	root := t.TempDir()
+	host := newConsolePeer(t, root, "host", "pair", nil)
+	target := newConsolePeer(t, root, "target", "pair", func(m, sc, cw string, to float64) map[string]any {
+		if strings.Contains(m, "boom") {
+			return map[string]any{"ok": false, "exit_code": 2, "reply": "exploded", "peer": "target"}
+		}
+		return map[string]any{"ok": true, "exit_code": 0, "reply": "ok", "peer": "target"}
+	})
+	consolePairApprove(t, host, target)
+
+	code, out := consoleReq(t, "POST", host.URL+"/peer/console/send", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL, "message": "hello", "scope": "chat"})
+	if code != 200 || asString(out["status"]) != "completed" {
+		t.Fatalf("success send: code=%d status=%v", code, out["status"])
+	}
+	if asString(out["request_id"]) == "" {
+		t.Fatalf("success send missing request_id: %v", out)
+	}
+
+	code, out = consoleReq(t, "POST", host.URL+"/peer/console/send", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL, "message": "boom", "scope": "chat"})
+	if code != 200 || asString(out["status"]) != "failed" {
+		t.Fatalf("failed send: code=%d status=%v", code, out["status"])
+	}
+
+	code, out = consoleReq(t, "POST", host.URL+"/peer/console/history", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL})
+	if code != 200 {
+		t.Fatalf("history code=%d out=%v", code, out)
+	}
+	turns, _ := out["turns"].([]any)
+	if len(turns) != 4 {
+		t.Fatalf("expected 4 turns, got %d", len(turns))
+	}
+	a1, _ := turns[1].(map[string]any)
+	r1, _ := a1["receipt"].(map[string]any)
+	if asString(r1["status"]) != "completed" || asString(r1["request_id"]) == "" {
+		t.Fatalf("turn1 receipt = %v", r1)
+	}
+	a2, _ := turns[3].(map[string]any)
+	r2, _ := a2["receipt"].(map[string]any)
+	if asString(r2["status"]) != "failed" || asFloat(r2["exit_code"]) != 2 {
+		t.Fatalf("turn2 receipt = %v", r2)
+	}
+}
+
+// TestConsoleSendUnreachableRecorded proves a send that never reaches the target
+// is still recorded in history with a failure receipt (send success != received).
+func TestConsoleSendUnreachableRecorded(t *testing.T) {
+	root := t.TempDir()
+	host := newConsolePeer(t, root, "host", "pair", nil)
+	target := newConsolePeer(t, root, "target", "pair", func(m, sc, cw string, to float64) map[string]any {
+		return map[string]any{"ok": true, "exit_code": 0, "reply": "ok", "peer": "target"}
+	})
+	consolePairApprove(t, host, target)
+	target.Stop() // target goes offline after pairing
+
+	code, out := consoleReq(t, "POST", host.URL+"/peer/console/send", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL, "message": "hello", "scope": "chat"})
+	if code != 502 {
+		t.Fatalf("expected 502 for unreachable target, got %d (%v)", code, out)
+	}
+
+	code, out = consoleReq(t, "POST", host.URL+"/peer/console/history", host.approvalSecret,
+		map[string]any{"controller": "host", "target_url": target.URL})
+	if code != 200 {
+		t.Fatalf("history code=%d out=%v", code, out)
+	}
+	turns, _ := out["turns"].([]any)
+	if len(turns) != 2 {
+		t.Fatalf("failed send should be recorded as 2 turns, got %d (%v)", len(turns), out)
+	}
+	a, _ := turns[1].(map[string]any)
+	r, _ := a["receipt"].(map[string]any)
+	if asString(r["status"]) == "" || asString(r["status"]) == "completed" {
+		t.Fatalf("unreachable receipt should be a failure, got %v", r)
+	}
+}

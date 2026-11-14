@@ -158,7 +158,15 @@ func (c *Client) request(grant map[string]any, message, scope, cwd string, timeo
 			if respPacket == nil {
 				return nil, fmt.Errorf("目标返回了无法识别的直连响应")
 			}
-			return DecryptPacket(key, respPacket, aad)
+			result, err := DecryptPacket(key, respPacket, aad)
+			if err != nil {
+				return nil, err
+			}
+			if result != nil {
+				// Correlate the sender's receipt with the receiver's receipt log.
+				result["request_id"] = requestID
+			}
+			return result, nil
 		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("等待目标机器批准或执行本次请求超时")

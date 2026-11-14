@@ -64,6 +64,8 @@ type Server struct {
 	pairNonces         map[string]bool
 	rate               map[string][]float64
 
+	receipts *ReceiptStore
+
 	http     *http.Server
 	listener net.Listener
 }
@@ -118,6 +120,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		seenRequests:       map[string]bool{},
 		pairNonces:         map[string]bool{},
 		rate:               map[string][]float64{},
+		receipts:           LoadReceipts(cfg.DataDir),
 	}
 	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, fmt.Sprint(cfg.Port)))
 	if err != nil {
@@ -211,6 +214,62 @@ func (s *Server) publicPeer(hostHeader string) map[string]any {
 	}
 }
 
+// healthSnapshot is publicPeer plus live activity state. It is only called from
+// the health handler (which does not hold s.mu), so it can lock briefly to read
+// the execution maps without deadlocking notify->publicPeer.
+func (s *Server) healthSnapshot(hostHeader string) map[string]any {
+	m := s.publicPeer(hostHeader)
+	s.mu.Lock()
+	running := len(s.executionRunning)
+	pendingApproval := len(s.executionPending) + len(s.pending)
+	s.mu.Unlock()
+	state := "idle"
+	if running > 0 {
+		state = "executing"
+	} else if pendingApproval > 0 {
+		state = "awaiting_approval"
+	}
+	m["state"] = state
+	m["active_executions"] = PyFloat(float64(running))
+	m["pending_approvals"] = PyFloat(float64(pendingApproval))
+	return m
+}
+
+// recordStage appends one lifecycle transition to a request's receipt.
+func (s *Server) recordStage(requestID, stage, detail string) {
+	s.receipts.Update(requestID, func(r *Receipt) { r.addStage(stage, detail) })
+}
+
+// recordReceived opens a receipt with the source identity and message preview.
+func (s *Server) recordReceived(requestID string, grant map[string]any, scope, message string) {
+	s.receipts.Update(requestID, func(r *Receipt) {
+		r.PeerID = asString(grant["peer_id"])
+		r.Hostname = asString(grant["source_hostname"])
+		r.Agent = asString(grant["source_agent"])
+		r.Scope = scope
+		r.Message = truncateRunes(message, 200)
+		r.addStage(StageReceived, "")
+	})
+}
+
+// recordResult closes a receipt with the executor outcome (completed/failed).
+func (s *Server) recordResult(requestID string, result map[string]any, start time.Time) {
+	ok := asBool(result["ok"], false)
+	code := int(asFloat(result["exit_code"]))
+	stage := StageCompleted
+	if !ok {
+		stage = StageFailed
+	}
+	s.receipts.Update(requestID, func(r *Receipt) {
+		r.ExitCode = code
+		r.DurationS = time.Since(start).Seconds()
+		if !ok {
+			r.Error = truncateRunes(asString(result["reply"]), 300)
+		}
+		r.addStage(stage, "")
+	})
+}
+
 func (s *Server) notify(requestID, kind, message string) {
 	if s.cfg.Notifier == nil {
 		return
@@ -255,7 +314,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	var value any
 	switch {
 	case r.Method == "GET" && path == "/peer/health":
-		status, value = 200, s.publicPeer(r.Host)
+		status, value = 200, s.healthSnapshot(r.Host)
+	case r.Method == "GET" && path == "/peer/receipts":
+		status, value = s.local(w, r, path, nil)
 	case r.Method == "GET" && path == "/peer/ui":
 		remoteIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 		if !isLoopback(remoteIP) {
@@ -356,6 +417,7 @@ func (s *Server) expireLocked() {
 			source, _ := item["source"].(map[string]any)
 			s.completed[id] = map[string]any{"status": "expired", "peer_id": asString(source["peer_id"])}
 			delete(s.pending, id)
+			s.recordStage(id, StageExpired, "pairing")
 		}
 	}
 	for id, item := range s.executionPending {
@@ -363,6 +425,7 @@ func (s *Server) expireLocked() {
 			item["status"] = "expired"
 			s.executionCompleted[id] = item
 			delete(s.executionPending, id)
+			s.recordStage(id, StageExpired, "")
 		}
 	}
 }
@@ -555,6 +618,9 @@ func (s *Server) local(w http.ResponseWriter, r *http.Request, path string, payl
 		s.mu.Unlock()
 		return 200, map[string]any{"requests": requests, "grants": s.Grants.ListGrants()}
 	}
+	if path == "/peer/receipts" {
+		return 200, map[string]any{"receipts": s.receipts.ListGeneric()}
+	}
 	requestID := asString(payload["request_id"])
 	if path == "/peer/revoke" {
 		removed := s.Grants.Revoke(asString(payload["peer_id"]))
@@ -575,6 +641,7 @@ func (s *Server) local(w http.ResponseWriter, r *http.Request, path string, payl
 		execution["status"] = status
 		s.executionCompleted[requestID] = execution
 		s.mu.Unlock()
+		s.recordStage(requestID, status, "")
 		return 200, map[string]any{"ok": true, "status": status}
 	}
 	pending, ok := s.pending[requestID]
@@ -590,6 +657,7 @@ func (s *Server) local(w http.ResponseWriter, r *http.Request, path string, payl
 		s.mu.Lock()
 		s.completed[requestID] = map[string]any{"status": "denied", "peer_id": asString(source["peer_id"])}
 		s.mu.Unlock()
+		s.recordStage(requestID, StageDenied, "")
 		return 200, map[string]any{"ok": true, "status": "denied"}
 	}
 	if path != "/peer/approve" {
@@ -640,6 +708,7 @@ func (s *Server) local(w http.ResponseWriter, r *http.Request, path string, payl
 	s.mu.Lock()
 	s.completed[requestID] = completed
 	s.mu.Unlock()
+	s.recordStage(requestID, StageApproved, "")
 	return 200, response
 }
 
@@ -745,6 +814,7 @@ func (s *Server) directRequest(body map[string]any) (int, any) {
 		return 400, map[string]any{"error": "消息为空或超过 40000 字符"}
 	}
 	s.mu.Lock()
+	newRequest := false
 	if requestV2 {
 		if s.executionRunning[requestID] == nil {
 			sourceAgent := asString(grant["source_agent"])
@@ -761,6 +831,7 @@ func (s *Server) directRequest(body map[string]any) (int, any) {
 				"peer_id": asString(grant["peer_id"]), "grant_id": grantID,
 				"digest": digest, "payload": payload,
 			}
+			newRequest = true
 		}
 	} else {
 		if s.seenRequests[requestID] {
@@ -768,9 +839,16 @@ func (s *Server) directRequest(body map[string]any) (int, any) {
 			return 409, map[string]any{"error": "重复请求已拒绝"}
 		}
 		s.seenRequests[requestID] = true
+		newRequest = true
 	}
 	isPending := requestV2 && s.executionPending[requestID] != nil
 	s.mu.Unlock()
+	if newRequest {
+		s.recordReceived(requestID, grant, scope, message)
+		if isPending {
+			s.recordStage(requestID, StageApprovalRequired, "")
+		}
+	}
 	if isPending {
 		fmt.Printf("[peer:%s] 待批准执行 %s: %.120s\n", s.cfg.Name, requestID, message)
 		s.notify(requestID, "execution", message)
@@ -783,7 +861,10 @@ func (s *Server) directRequest(body map[string]any) (int, any) {
 	if timeout > 900 {
 		timeout = 900
 	}
+	s.recordStage(requestID, StageExecuting, "")
+	execStart := time.Now()
 	result := s.execute(message, scope, cwd, timeout)
+	s.recordResult(requestID, result, execStart)
 	encrypted, err := EncryptPacket(key, result, aad)
 	if err != nil {
 		return 500, map[string]any{"error": "直连执行失败：" + err.Error()}

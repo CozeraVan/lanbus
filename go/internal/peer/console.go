@@ -202,29 +202,11 @@ func (s *Server) consoleSend(body map[string]any) (int, any) {
 	if scope != "project" {
 		scope = "chat"
 	}
-	client, err := NewClient(targetURL, dir)
-	if err != nil {
-		return 500, map[string]any{"error": err.Error()}
-	}
-	health, err := JSONRequest(targetURL+"/peer/health", nil, nil, 10)
-	if err != nil {
-		return 502, map[string]any{"error": err.Error()}
-	}
-	grant := client.FindGrant(asString(health["peer_id"]), scope)
-	if grant == nil {
-		return 409, map[string]any{"error": "尚未配对，请先发送确认请求并等待目标同意", "need_pairing": true}
-	}
-	timeout := asFloat(body["timeout"])
-	if timeout <= 0 {
-		timeout = 300
-	}
-	statusTimeout := asFloat(body["status_timeout"])
-	if statusTimeout <= 0 {
-		statusTimeout = 600
-	}
 	// Multi-turn continuity: the target spawns a fresh agent per request, so we
 	// prepend the stored conversation history to each new message. The first
 	// turn (no history) is sent unchanged, preserving one-shot behavior.
+	// Settings are resolved before sending so failed attempts are recorded with
+	// the same context/turn-limit the exchange would have used.
 	convKey := targetURL
 	convs := loadConversations(dir)
 	conv, _ := convs[convKey].(map[string]any)
@@ -240,19 +222,73 @@ func (s *Server) consoleSend(body map[string]any) (int, any) {
 	if maxTurns > consoleMaxTurnsHard {
 		maxTurns = consoleMaxTurnsHard
 	}
+	client, err := NewClient(targetURL, dir)
+	if err != nil {
+		return 500, map[string]any{"error": err.Error()}
+	}
+	health, err := JSONRequest(targetURL+"/peer/health", nil, nil, 10)
+	if err != nil {
+		// Send never reached the target: record the attempt so "sent" is not
+		// mistaken for "received", and surface the failure stage.
+		recordExchange(dir, convKey, targetURL, scope, message, "", carry, maxTurns,
+			map[string]any{"status": "unreachable", "error": err.Error()})
+		return 502, map[string]any{"error": err.Error(), "status": "unreachable"}
+	}
+	grant := client.FindGrant(asString(health["peer_id"]), scope)
+	if grant == nil {
+		return 409, map[string]any{"error": "尚未配对，请先发送确认请求并等待目标同意", "need_pairing": true}
+	}
+	timeout := asFloat(body["timeout"])
+	if timeout <= 0 {
+		timeout = 300
+	}
+	statusTimeout := asFloat(body["status_timeout"])
+	if statusTimeout <= 0 {
+		statusTimeout = 600
+	}
 	outgoing := message
 	if carry {
 		outgoing = buildContextMessage(priorTurns, message, maxTurns)
 	}
 	result, err := client.RequestV2(grant, outgoing, scope, asString(body["cwd"]), timeout, statusTimeout)
 	if err != nil {
-		return 502, map[string]any{"error": err.Error()}
+		status := classifySendError(err)
+		recordExchange(dir, convKey, targetURL, scope, message, "", carry, maxTurns,
+			map[string]any{"status": status, "error": err.Error()})
+		return 502, map[string]any{"error": err.Error(), "status": status}
+	}
+	status := "completed"
+	if !asBool(result["ok"], false) {
+		status = "failed"
 	}
 	// Record the clean exchange (original user text, not the context-expanded
 	// prompt) so history never compounds prior context blobs, and persist settings.
-	recordExchange(dir, convKey, targetURL, scope, message, asString(result["reply"]), carry, maxTurns)
+	// The receipt correlates this turn with the receiver's receipt log.
+	receipt := map[string]any{
+		"request_id": asString(result["request_id"]),
+		"status":     status,
+		"exit_code":  result["exit_code"],
+	}
+	recordExchange(dir, convKey, targetURL, scope, message, asString(result["reply"]), carry, maxTurns, receipt)
 	result["conversation_turns"] = PyFloat(float64(len(priorTurns) + 2))
+	result["status"] = status
 	return 200, result
+}
+
+// classifySendError maps a RequestV2 failure to a receipt status so the sender
+// can tell denial/expiry/timeout apart from a generic execution failure.
+func classifySendError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "拒绝"):
+		return "denied"
+	case strings.Contains(msg, "过期"):
+		return "expired"
+	case strings.Contains(msg, "超时"):
+		return "timeout"
+	default:
+		return "failed"
+	}
 }
 
 // consoleHistory returns the stored conversation turns for a target so the GUI
@@ -333,7 +369,7 @@ func convTurns(convs map[string]any, key string) []any {
 	return turns
 }
 
-func recordExchange(dir, key, targetURL, scope, userText, agentText string, carry bool, maxTurns int) {
+func recordExchange(dir, key, targetURL, scope, userText, agentText string, carry bool, maxTurns int, receipt map[string]any) {
 	convs := loadConversations(dir)
 	conv, _ := convs[key].(map[string]any)
 	if conv == nil {
@@ -342,7 +378,11 @@ func recordExchange(dir, key, targetURL, scope, userText, agentText string, carr
 	turns, _ := conv["turns"].([]any)
 	ts := now()
 	turns = append(turns, map[string]any{"role": "user", "text": userText, "ts": ts})
-	turns = append(turns, map[string]any{"role": "agent", "text": agentText, "ts": ts})
+	agentTurn := map[string]any{"role": "agent", "text": agentText, "ts": ts}
+	if receipt != nil {
+		agentTurn["receipt"] = receipt
+	}
+	turns = append(turns, agentTurn)
 	conv["target_url"] = targetURL
 	conv["scope"] = scope
 	conv["turns"] = turns
@@ -406,6 +446,10 @@ func buildContextMessage(turns []any, message string, maxTurns int) string {
 	for _, tv := range turns[start:] {
 		t, _ := tv.(map[string]any)
 		if t == nil {
+			continue
+		}
+		// Skip failed/empty replies so a broken turn does not pollute context.
+		if asString(t["text"]) == "" {
 			continue
 		}
 		label := "操控方"

@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+- **Direct-mode receipt system (回执)** for the company network: the receiver persists a bounded receipt log (`receipts.json`) tracing every request through `received → approval_required → approved/denied/expired → executing → completed/failed`, with timestamps, exit code, error and duration. Exposed via a loopback-only `/peer/receipts` endpoint so a sender can tell whether a message was merely sent, actually received, approved and executed — and exactly where it failed.
+- **Live agent state**: `/peer/health` now reports `state` (`idle` / `awaiting_approval` / `executing`) plus active-execution and pending-approval counts.
+- **CLI observability commands**: `lanbus status [--name N]` (company registration + online/live state, lists all local peers when `--name` is omitted), `lanbus history --name N [--target URL]` (conversation history with per-turn receipt status), `lanbus receipts --name N` (the receiver-side receipt log for debugging).
+- **Console status badges**: each dialog message shows a receipt badge (已完成/失败/已拒绝/已过期/超时/未送达) with the `request_id` on hover; failed turns display their error.
+
+### Changed
+- Console conversation history now records **failed sends too** (unreachable target, denial, expiry, timeout, execution failure) with a per-turn receipt (`request_id`, `status`, `exit_code`, `error`); previously a failed send left no trace. The direct client returns `request_id` so sender and receiver receipts correlate. Empty/failed replies are skipped when building multi-turn context.
+
 ## [1.9.3] - 2026-11-14
 
 ### Added

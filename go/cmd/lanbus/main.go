@@ -37,6 +37,12 @@ func main() {
 		err = peerUI(args, openBrowser)
 	case "console":
 		err = consoleCmd(args, openBrowser)
+	case "status":
+		err = statusCmd(args)
+	case "history":
+		err = historyCmd(args)
+	case "receipts":
+		err = receiptsCmd(args)
 	case "backup":
 		err = backupCmd(args)
 	case "restore":
@@ -64,6 +70,9 @@ Usage:
   lanbus healthcheck [--url URL]          probe hub /health (exit 0=ok)
   lanbus peer-ui --name NAME [--data-dir DIR]
   lanbus console --name NAME [--data-dir DIR]   open the command console
+  lanbus status [--name NAME] [--data-dir DIR]  agent registration + live state
+  lanbus history --name NAME [--target URL]     conversation history + receipts
+  lanbus receipts --name NAME [--data-dir DIR]  receiver-side receipt log
   lanbus backup [--data-dir DIR] [--out FILE]
   lanbus restore [--data-dir DIR] ARCHIVE
   lanbus daemon install|uninstall|status [--name N] [--exe PATH]
